@@ -22,8 +22,39 @@ class MetadataOption(Enum):
     SIZE = 6
 
 
-def extract_image_metadata(image_path: str, filetype: str = 'png', verbose: bool = False
-                           ) -> Optional[Tuple[str, str, str, str, str, str, str]]:
+def extract_image_metadata(image_path: str, filetype: str = 'png', verbose: bool = False) -> dict | None:
+    try:
+        if filetype == 'png':
+            with Image.open(image_path) as img:
+                if hasattr(img, 'info'):
+                    metadata = img.info
+                else:
+                    if verbose:
+                        print(f"No info attribute found in {image_path}")
+                    return None
+
+        elif filetype == 'jpg':
+            img = piexif.load(image_path)
+            try:
+                metadata = piexif.helper.UserComment.load(img["Exif"][piexif.ExifIFD.UserComment])
+            except KeyError:  # no exif data
+                if verbose:
+                    print(f"No metadata found for {image_path}")
+                return None
+        else:
+            raise ValueError("Invalid image type")
+
+        return metadata
+
+    except Exception:
+        return None
+
+def extract_video_metadata(video_path: str, filetype: str = '.mp4', verbose: bool = False):
+    pass
+
+
+def extract_a1111_metadata(image_path: str, filetype: str = 'png', verbose: bool = False
+                           ) -> Tuple[str, str, str, str, str, str, str]:
     """
     Extract metadata from png or jpg image file.
 
@@ -36,59 +67,180 @@ def extract_image_metadata(image_path: str, filetype: str = 'png', verbose: bool
         A tuple of (parameters, positive, negative, steps, sampler, cfg, size)
         or None if metadata couldn't be extracted.
     """
-    try:
-        if filetype == 'png':
-            with Image.open(image_path) as img:
-                metadata = img.info
-                parameters = metadata.get('parameters', '')
-        elif filetype == 'jpg':
-            img = piexif.load(image_path)
-            try:
-                parameters = piexif.helper.UserComment.load(img["Exif"][piexif.ExifIFD.UserComment])
-            except KeyError:  # no exif data
-                if verbose:
-                    print(f"No metadata found for {image_path}")
-                # return '', '', '', '', '', '', ''
-                return None
-        else:
-            raise ValueError("Invalid image type")
+    metadata = extract_image_metadata(image_path, filetype, verbose)
+    parameters = metadata.get('parameters', '')
+    if not parameters:
+        return '', '', '', '', '', '', ''
 
-        positive_end = parameters.find("Negative")
-        positive = parameters[:positive_end].strip()
+    positive_end = parameters.find("Negative")
+    positive = parameters[:positive_end].strip()
 
-        negative_start = parameters.find("Negative prompt: ")
-        negative_end = parameters.find("Steps")
-        negative = parameters[negative_start:negative_end].strip()
+    negative_start = parameters.find("Negative prompt: ")
+    negative_end = parameters.find("Steps")
+    negative = parameters[negative_start:negative_end].strip()
 
-        steps_start = parameters.find("Steps: ")
-        steps_end = parameters.find(", Sampler")
-        steps = parameters[steps_start:steps_end].strip()
+    steps_start = parameters.find("Steps: ")
+    steps_end = parameters.find(", Sampler")
+    steps = parameters[steps_start:steps_end].strip()
 
-        sampler_start = parameters.find(", Sampler: ")
-        sampler_end = parameters.find(", CFG scale")
-        sampler = parameters[sampler_start:sampler_end].strip()
+    sampler_start = parameters.find(", Sampler: ")  # TODO scheduler
+    sampler_end = parameters.find(", CFG scale")
+    sampler = parameters[sampler_start:sampler_end].strip()
 
-        cfg_start = parameters.find(", CFG scale: ")
-        cfg_end = parameters.find(", Seed")
-        cfg = parameters[cfg_start:cfg_end].strip()
+    cfg_start = parameters.find(", CFG scale: ")
+    cfg_end = parameters.find(", Seed")
+    cfg = parameters[cfg_start:cfg_end].strip()
 
-        size_start = parameters.find("Size: ")
-        size_end = parameters.find(", Model hash")
-        size = parameters[size_start:size_end].strip()
+    size_start = parameters.find("Size: ")
+    size_end = parameters.find(", Model hash")
+    size = parameters[size_start:size_end].strip()
 
-        return parameters, positive, negative, steps, sampler, cfg, size
+    return parameters, positive, negative, steps, sampler, cfg, size
 
-    except Exception as e:
-        return None
+def extract_comfy_metadata(image_path: str, filetype: str = 'png', verbose: bool = False) -> dict:
+    result = {
+        'positive': "",
+        'negative': "",
+        'steps': "",
+        'sampler': "",
+        'scheduler': "",
+        'cfg': "",
+        'size': "",
+        'seed': "",
+        'model': ""
+    }
 
-def extract_image_metadata_comfy(file_path: str, filetype: str = 'png', verbose: bool = False
-                            ) -> Optional[Tuple[str, str, str, str, str, str, str]]:
-    try:
-        vid = ffmpeg.probe(file_path)
-        print(vid['streams'])
-    except Exception as e:
-        print(f"Error: {e}")
+    metadata = extract_image_metadata(image_path, filetype, verbose)
+    nodes = json.loads(metadata['prompt'])
+    if not nodes:
+        return result
 
+    print(nodes)
+    potential_prompts = []
+    ksamplers = []
+
+    for id, data in nodes.items():
+        node_type = data['class_type'].lower()
+
+        if "textencode" in node_type or node_type in ["easy positive", "easy negative"]:
+            # If the title contains "positive" or "negative" it can easily be categorized
+            if "positive" in data['_meta']['title'].lower() and not result.get('positive'):
+                prompt = extract_comfy_prompt(data)
+                if prompt:
+                    result['positive'] = prompt
+            elif "negative" in data['_meta']['title'].lower() and not result.get('positive'):
+                prompt = extract_comfy_prompt(data)
+                if prompt:
+                    result['negative'] = prompt
+            else:
+                potential_prompt = extract_comfy_prompt(data)
+                if potential_prompt:
+                    potential_prompts.append(potential_prompt)
+
+        if "ksampler" in node_type:
+            if 'steps' in data['inputs']:    # Required for sorting
+                ksamplers.append(data['inputs'])
+
+        model_keywords = ['checkpoint', 'unet', 'gguf', 'clip', 'model']
+        if node_type not in ['vae', 'image', 'video']:
+            if "load" in node_type and any(name in node_type for name in model_keywords):
+                # Just using the first viable result for now
+                if not result.get('model'):
+                    model = next((v for k, v in data['inputs'].items() if "name" in k), None)
+                    if model:
+                        result['model'] = model.split('\\')[-1]
+
+        if "latentimage" in node_type and not result['size']:
+            width = data['inputs'].get('width')
+            height = data['inputs'].get('height')
+            if width and height:
+                result['size'] = f"{width}x{height}"
+
+        print(f"{data['class_type']}, {data['inputs']}")
+
+    # The longest text probably is the positive prompt. If found already, it's probably the negative prompt
+    potential_prompts = sorted(potential_prompts, key=lambda x: len(x), reverse=True)
+    if potential_prompts:
+        if not result.get('positive') and not result.get('negative'):
+            result['positive'] = potential_prompts[0]
+            if len(potential_prompts) > 1:
+                result['negative'] = potential_prompts[1]
+        if not result.get('positive'):
+            result['positive'] = potential_prompts[0]
+        if not result.get('negative'):
+            result['negative'] = potential_prompts[0]
+
+    # The Ksampler with the highest number of steps probably is the main Ksampler, refiners/upscale typically use fewer steps
+    ksamplers = sorted(ksamplers, key=lambda x: x.get('steps', 0), reverse=True)
+    if ksamplers:
+        result['steps'] = ksamplers[0].get('steps')
+        result['sampler'] = ksamplers[0].get('sampler')
+        result['sampler'] = ksamplers[0].get('sampler_name')
+        result['scheduler'] = ksamplers[0].get('scheduler')
+        result['cfg'] = ksamplers[0].get('cfg')
+        result['seed'] = ksamplers[0].get('seed')
+
+    return result
+
+
+def extract_comfy_prompt(node_data: dict) -> str | None:
+    inputs = node_data['inputs']
+
+    def get_str(key):           # Helper to ignore lists and safely strip
+        val = inputs.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+        return ""
+
+    text = get_str('text')
+    if text:
+        return text
+
+    # CLIPTextEncodeSDXL
+    text_g = get_str('text_g')
+    text_l = get_str('text_l')
+    if text_g or text_l:
+        return f"{text_g} {text_l}"
+
+    # CLIPTextEncodeFlux
+    clip_l = get_str('clip_l')
+    t5xxl = get_str('t5xxl')
+    if clip_l or t5xxl:
+        return f"{clip_l} {t5xxl}"
+
+    # easy positive/easy negative
+    positive = get_str('positive')
+    if positive:
+        return positive
+    negative = get_str('negative')
+    if negative:
+        return negative
+
+    # TextEncodeQwenImageEdit & TextEncodeZImageOmni & probably others
+    prompt = get_str('prompt')
+    if prompt:
+        return prompt
+
+    return None
+
+def format_comfy_parameters(parameters: dict) -> str:
+    positive = parameters.get('positive', '')
+    negative = parameters.get('negative', '')
+    steps = parameters.get('steps', '')
+    sampler = parameters.get('sampler', '')
+    scheduler = parameters.get('scheduler', '')
+    cfg = parameters.get('cfg', '')
+    seed = parameters.get('seed', '')
+    size = parameters.get('size', '')
+    model_name = parameters.get('model', '')
+
+    parameters_str = f"""
+    {positive}\n
+    Negative prompt: {negative}\n
+    Steps: {steps}, Sampler: {sampler}, Scheduler: {scheduler}, CFG scale: {cfg}, Seed: {seed}, Size: {size}, Model: {model_name}
+    """
+
+    return parameters_str
 
 def process_string(s: str) -> str:
     """
@@ -287,7 +439,7 @@ def add_metadata_to_json(
         add_lora_tags: Whether to add LoRA tags to the JSON
         strip_version: Whether to strip version information from LoRA tags
     """
-
+    # TODO offset parameter
     processed_count = 0
 
     for root, dirs, files in os.walk(root_dir):
@@ -383,21 +535,11 @@ def add_metadata_to_json(
 
 
 if __name__ == '__main__':
-    #root = "D:\\AI\\StableDiffusion2.library\\images"
-    # add_metadata_to_json(root,
-    #                      amount=50,
-    #                      overwrite=True,
-    #                      option=MetadataOption.ALL,
-    #                      verbose=True,
-    #                      add_lora_tags=True,
-    #                      strip_version=True)
-    print(extract_image_metadata(image_path="D:\\AI\\StableDiffusion.library\\images\\MJA2ILUCKC64X.info\\ComfyUI_00007_.png", verbose=True))
-# Example prompt:
-"""
-score_9, score_8_up, source_anime, unusual creature, concept art, creature, floating, concept art, creature, alien, moth, biomorphic glyphs, bioluminescent, ((metallic body)), almost human, crab pincers, low detail,
-
- <lora:Alien_Concept_Art:1> <lora:xl_more_art-full_v1:0.6>
-Negative prompt: score_6, score_5, score_4, monochrome
-
-Steps: 25, Sampler: Euler a, CFG scale: 5, Seed: 1529354297, Size: 832x1200, Model hash: 67ab2fd8ec, Model: ponyDiffusionV6XL_v6StartWithThisOne, VAE hash: 235745af8d, VAE: sdxl_vae.safetensors, Denoising strength: 0.4, Clip skip: 2, Hires upscale: 1.5, Hires steps: 14, Hires upscaler: 4x-UltraSharp, Lora hashes: "Alien_Concept_Art: fbfb35629d0a, xl_more_art-full_v1: fe3b4816be83", Emphasis: No norm, Version: f0.0.17v1.8.0rc-latest-276-g29be1da7
-"""
+    root = "D:\\AI\\StableDiffusion.library\\images"
+    add_metadata_to_json(root,
+                         amount=50,
+                         overwrite=True,
+                         option=MetadataOption.ALL,
+                         verbose=True,
+                         add_lora_tags=True,
+                         strip_version=True)
