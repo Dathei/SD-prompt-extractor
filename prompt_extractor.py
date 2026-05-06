@@ -49,12 +49,13 @@ def extract_image_metadata(image_path: str, filetype: str = 'png', verbose: bool
     except Exception:
         return None
 
+
 def extract_video_metadata(video_path: str, filetype: str = '.mp4', verbose: bool = False):
-    pass
+    pass        # TODO
 
 
 def extract_a1111_metadata(image_path: str, filetype: str = 'png', verbose: bool = False
-                           ) -> Tuple[str, str, str, str, str, str, str]:
+                           ) -> Tuple[str, str, str, str, str, str, str, str]:
     """
     Extract metadata from png or jpg image file.
 
@@ -64,13 +65,13 @@ def extract_a1111_metadata(image_path: str, filetype: str = 'png', verbose: bool
         verbose: Whether to print verbose information
 
     Returns:
-        A tuple of (parameters, positive, negative, steps, sampler, cfg, size)
+        A tuple of (parameters, positive, negative, steps, sampler, scheduler, cfg, size)
         or None if metadata couldn't be extracted.
     """
     metadata = extract_image_metadata(image_path, filetype, verbose)
     parameters = metadata.get('parameters', '')
     if not parameters:
-        return '', '', '', '', '', '', ''
+        return '', '', '', '', '', '', '', ''
 
     positive_end = parameters.find("Negative")
     positive = parameters[:positive_end].strip()
@@ -83,9 +84,13 @@ def extract_a1111_metadata(image_path: str, filetype: str = 'png', verbose: bool
     steps_end = parameters.find(", Sampler")
     steps = parameters[steps_start:steps_end].strip()
 
-    sampler_start = parameters.find(", Sampler: ")  # TODO scheduler
-    sampler_end = parameters.find(", CFG scale")
+    sampler_start = parameters.find(", Sampler: ")
+    sampler_end = parameters.find(", Schedule type")
     sampler = parameters[sampler_start:sampler_end].strip()
+
+    scheduler_start = parameters.find("Schedule type: ")
+    scheduler_end = parameters.find(", CFG")
+    scheduler = parameters[scheduler_start:scheduler_end].strip()
 
     cfg_start = parameters.find(", CFG scale: ")
     cfg_end = parameters.find(", Seed")
@@ -95,7 +100,8 @@ def extract_a1111_metadata(image_path: str, filetype: str = 'png', verbose: bool
     size_end = parameters.find(", Model hash")
     size = parameters[size_start:size_end].strip()
 
-    return parameters, positive, negative, steps, sampler, cfg, size
+    return parameters, positive, negative, steps, sampler, scheduler, cfg, size
+
 
 def extract_comfy_metadata(image_path: str, filetype: str = 'png', verbose: bool = False) -> dict:
     result = {
@@ -111,11 +117,10 @@ def extract_comfy_metadata(image_path: str, filetype: str = 'png', verbose: bool
     }
 
     metadata = extract_image_metadata(image_path, filetype, verbose)
-    nodes = json.loads(metadata['prompt'])
+    nodes = json.loads(metadata.get('prompt'))
     if not nodes:
         return result
 
-    print(nodes)
     potential_prompts = []
     ksamplers = []
 
@@ -138,10 +143,10 @@ def extract_comfy_metadata(image_path: str, filetype: str = 'png', verbose: bool
                     potential_prompts.append(potential_prompt)
 
         if "ksampler" in node_type:
-            if 'steps' in data['inputs']:    # Required for sorting
+            if 'steps' in data['inputs']:  # Required for sorting
                 ksamplers.append(data['inputs'])
 
-        model_keywords = ['checkpoint', 'unet', 'gguf', 'clip', 'model']
+        model_keywords = ['checkpoint', 'unet', 'gguf', 'clip', 'model']    # TODO e.g. priority of wan over t5xxl
         if node_type not in ['vae', 'image', 'video']:
             if "load" in node_type and any(name in node_type for name in model_keywords):
                 # Just using the first viable result for now
@@ -155,8 +160,6 @@ def extract_comfy_metadata(image_path: str, filetype: str = 'png', verbose: bool
             height = data['inputs'].get('height')
             if width and height:
                 result['size'] = f"{width}x{height}"
-
-        print(f"{data['class_type']}, {data['inputs']}")
 
     # The longest text probably is the positive prompt. If found already, it's probably the negative prompt
     potential_prompts = sorted(potential_prompts, key=lambda x: len(x), reverse=True)
@@ -186,7 +189,7 @@ def extract_comfy_metadata(image_path: str, filetype: str = 'png', verbose: bool
 def extract_comfy_prompt(node_data: dict) -> str | None:
     inputs = node_data['inputs']
 
-    def get_str(key):           # Helper to ignore lists and safely strip
+    def get_str(key):  # Helper to ignore lists and safely strip
         val = inputs.get(key)
         if isinstance(val, str) and val.strip():
             return val.strip()
@@ -223,6 +226,7 @@ def extract_comfy_prompt(node_data: dict) -> str | None:
 
     return None
 
+
 def format_comfy_parameters(parameters: dict) -> str:
     positive = parameters.get('positive', '')
     negative = parameters.get('negative', '')
@@ -234,13 +238,12 @@ def format_comfy_parameters(parameters: dict) -> str:
     size = parameters.get('size', '')
     model_name = parameters.get('model', '')
 
-    parameters_str = f"""
-    {positive}\n
-    Negative prompt: {negative}\n
-    Steps: {steps}, Sampler: {sampler}, Scheduler: {scheduler}, CFG scale: {cfg}, Seed: {seed}, Size: {size}, Model: {model_name}
-    """
+    parameters_str = f"""{positive}\n
+Negative prompt: {negative}\n
+Steps: {steps}, Sampler: {sampler}, Scheduler: {scheduler}, CFG scale: {cfg}, Seed: {seed}, Size: {size}, Model: {model_name}"""
 
     return parameters_str
+
 
 def process_string(s: str) -> str:
     """
@@ -265,11 +268,11 @@ def process_string(s: str) -> str:
 
 
 def get_datalist(
-    root_dir: str,
-    option: MetadataOption = MetadataOption.POSITIVE_PROMPT,
-    process: bool = True,
-    amount: Optional[int] = None,
-    verbose: bool = False
+        root_dir: str,
+        option: MetadataOption = MetadataOption.POSITIVE_PROMPT,
+        process: bool = True,
+        amount: Optional[int] = None,
+        verbose: bool = False
 ) -> List[str]:
     """
     Selects a random sample of images and extracts their metadata.
@@ -329,7 +332,8 @@ def get_datalist(
             except TypeError:
                 continue
 
-            if (option.value == 0 or option.value == 1 or option.value == 2) and process:  # process_string only for positive or negative prompt
+            if (
+                    option.value == 0 or option.value == 1 or option.value == 2) and process:  # process_string only for positive or negative prompt
                 processed_metadata = process_string(metadata)
                 if processed_metadata:  # Only add non-empty strings
                     if data and processed_metadata == data[-1]:
@@ -357,12 +361,12 @@ def get_datalist(
 
 
 def write_to_file(
-    input_root: str,
-    output_path: str,
-    option: MetadataOption = MetadataOption.POSITIVE_PROMPT,
-    process: bool = True,
-    amount: Optional[int] = None,
-    verbose: bool = False
+        input_root: str,
+        output_path: str,
+        option: Optional[MetadataOption] = MetadataOption.POSITIVE_PROMPT,
+        process: Optional[bool] = True,
+        amount: Optional[int] = None,
+        verbose: Optional[bool] = False
 ) -> None:
     """
     Extract metadata and write to textfile
@@ -386,7 +390,7 @@ def write_to_file(
     print(f"Data written to {output_path}")
 
 
-def add_lora_as_tags(image_data: str, strip_version: bool = False) -> List[str]:
+def add_lora_as_tags(image_data: str, strip_version: bool = False) -> List[str]:  # TODO Comfy Lora
     """
     Extracts LoRA tags from metadata string, optionally stripping version info.
 
@@ -417,13 +421,14 @@ def add_lora_as_tags(image_data: str, strip_version: bool = False) -> List[str]:
 
 
 def add_metadata_to_json(
-    root_dir: str,
-    amount: Optional[int] = None,
-    overwrite: bool = False,
-    option: MetadataOption = MetadataOption.ALL,
-    verbose: bool = False,
-    add_lora_tags: bool = False,
-    strip_version: bool = False
+        root_dir: str,
+        amount: Optional[int] = None,
+        offset: Optional[int] = 0,
+        overwrite: Optional[bool] = False,
+        option: Optional[MetadataOption] = MetadataOption.ALL,
+        verbose: Optional[bool] = False,
+        add_lora_tags: Optional[bool] = False,
+        strip_version: Optional[bool] = False
 ) -> None:
     """
     Adds parameters of images to Eagle's metadata json file
@@ -431,6 +436,7 @@ def add_metadata_to_json(
     Args:
         root_dir: Root directory to search for images
         amount: Amount of images to process, None for all
+        offset: Number of images to skip before starting to add metadata
         overwrite: Overwrite existing annotations
         option: Metadata option to extract
             0 - all, 1 - positive prompt, 2 - negative prompt,
@@ -439,21 +445,38 @@ def add_metadata_to_json(
         add_lora_tags: Whether to add LoRA tags to the JSON
         strip_version: Whether to strip version information from LoRA tags
     """
-    # TODO offset parameter
     processed_count = 0
+    skipped_count = 0
 
     for root, dirs, files in os.walk(root_dir):
         # sort by creation date, from newest to oldest
         dirs.sort(key=lambda d: os.path.getctime(os.path.join(root, d)), reverse=True)
 
         for file in files:
+            is_png = file.endswith('.png') and not file.endswith('_thumbnail.png')
+            is_jpg = file.endswith('.jpg') or file.endswith('.jpeg')
+
+            if not (is_png or is_jpg):
+                continue
+
+            if skipped_count < offset:
+                skipped_count += 1
+                continue
+
             try:
-                if file.endswith('.png') and not file.endswith('_thumbnail.png'):
-                    parameters = extract_image_metadata(os.path.join(root, file), filetype='png', verbose=verbose)[
+                if is_png:
+                    parameters = extract_a1111_metadata(os.path.join(root, file), filetype='png', verbose=verbose)[
                         option.value]
-                elif file.endswith('.jpg'):
-                    parameters = extract_image_metadata(os.path.join(root, file), filetype='jpg', verbose=verbose)[
+                    if not parameters:  # TODO write a general extract_metadata that checks for a1111/comfy keys
+                        parameters = format_comfy_parameters(
+                            extract_comfy_metadata(os.path.join(root, file), filetype='png', verbose=verbose))
+                        # TODO currently doesnt support option.value
+                elif is_jpg:
+                    parameters = extract_a1111_metadata(os.path.join(root, file), filetype='jpg', verbose=verbose)[
                         option.value]
+                    if not parameters:
+                        parameters = format_comfy_parameters(
+                            extract_comfy_metadata(os.path.join(root, file), filetype='jpg', verbose=verbose))
                 else:
                     continue  # skip any other files
             except TypeError:
@@ -485,9 +508,6 @@ def add_metadata_to_json(
                     if parameters:
                         data['annotation'] = parameters
                         update_json = True
-                else:   # TODO: remove, just for debugging
-                    #print(f"Annontation not empty: {data.get('annotation')}")
-                    pass
 
                 if add_lora_tags:
                     added_tags = False
@@ -523,7 +543,7 @@ def add_metadata_to_json(
             processed_count += 1
 
             if amount is not None:
-                print_percent = amount * 0.1    # Print progress every 10%
+                print_percent = max(int(amount * 0.1), 1)  # Print progress every 10%
                 if processed_count % print_percent == 0:
                     print(f"Processed {processed_count}/{amount} images")
             else:
@@ -537,7 +557,8 @@ def add_metadata_to_json(
 if __name__ == '__main__':
     root = "D:\\AI\\StableDiffusion.library\\images"
     add_metadata_to_json(root,
-                         amount=50,
+                         amount=5,
+                         offset=3,
                          overwrite=True,
                          option=MetadataOption.ALL,
                          verbose=True,
