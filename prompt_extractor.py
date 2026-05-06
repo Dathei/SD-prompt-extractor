@@ -4,7 +4,7 @@ import os
 import json
 import argparse
 import numpy as np
-import ffmpeg
+import av
 from PIL import Image
 import piexif
 import piexif.helper
@@ -46,12 +46,10 @@ def extract_image_metadata(image_path: str, filetype: str = 'png', verbose: bool
 
         return metadata
 
-    except Exception:
+    except Exception:   # TODO
         return None
 
 
-def extract_video_metadata(video_path: str, filetype: str = '.mp4', verbose: bool = False):
-    pass        # TODO
 
 
 def extract_a1111_metadata(image_path: str, filetype: str = 'png', verbose: bool = False
@@ -103,7 +101,56 @@ def extract_a1111_metadata(image_path: str, filetype: str = 'png', verbose: bool
     return parameters, positive, negative, steps, sampler, scheduler, cfg, size
 
 
-def extract_comfy_metadata(image_path: str, filetype: str = 'png', verbose: bool = False) -> dict:
+def load_comfy_image_workflow(file_path: str, filetype: str = 'png', verbose: bool = False) -> dict:
+    metadata = extract_image_metadata(file_path, filetype, verbose)
+    nodes = json.loads(metadata.get('prompt'))
+
+    return nodes if nodes else None
+
+
+def load_comfy_video_workflow(video_path: str, filetype: str = 'mp4', verbose: bool = False) -> dict:
+    try:
+        with av.open(video_path) as container:
+            metadata = container.metadata
+            comment_str = metadata.get('comment')
+
+            if not comment_str:
+                return None
+
+            nodes = json.loads(comment_str)
+            prompt = nodes.get('prompt')
+
+            if not prompt:
+                return None
+
+            if isinstance(prompt, str):
+                return json.loads(prompt)
+
+            return prompt
+
+    except json.JSONDecodeError:
+        pass
+
+    return None
+
+
+def resolve_linked_node(link: list, nodes: dict) -> int:
+    try:
+        target_id = str(link[0])
+        target_node = nodes.get(target_id, {})
+
+        for k, v in target_node.items():
+            if isinstance(v, (int, float)):     # probably not necessary
+                return int(v)
+            if isinstance(v, dict):
+                return int(v.get('value')) if v.get('value') else 0
+
+    except Exception:
+        pass
+
+    return 0
+
+def extract_comfy_metadata(file_path: str, filetype: str = 'png', verbose: bool = False) -> dict:
     result = {
         'positive': "",
         'negative': "",
@@ -116,46 +163,72 @@ def extract_comfy_metadata(image_path: str, filetype: str = 'png', verbose: bool
         'model': ""
     }
 
-    metadata = extract_image_metadata(image_path, filetype, verbose)
-    nodes = json.loads(metadata.get('prompt'))
+    if filetype in ['png', 'jpg']:
+        nodes = load_comfy_image_workflow(file_path, filetype, verbose)
+    elif filetype == 'mp4':
+        nodes = load_comfy_video_workflow(file_path, filetype, verbose)
+    else:
+        return {}
+
     if not nodes:
-        return result
+        return {}
 
     potential_prompts = []
     ksamplers = []
+    empty_negative = False
 
-    for id, data in nodes.items():
+    for node_id, data in nodes.items():
         node_type = data['class_type'].lower()
+        print(f"{node_id} node_type: {node_type}, data: {data}")
 
         if "textencode" in node_type or node_type in ["easy positive", "easy negative"]:
-            # If the title contains "positive" or "negative" it can easily be categorized
-            if "positive" in data['_meta']['title'].lower() and not result.get('positive'):
-                prompt = extract_comfy_prompt(data)
-                if prompt:
-                    result['positive'] = prompt
-            elif "negative" in data['_meta']['title'].lower() and not result.get('positive'):
-                prompt = extract_comfy_prompt(data)
-                if prompt:
-                    result['negative'] = prompt
-            else:
-                potential_prompt = extract_comfy_prompt(data)
-                if potential_prompt:
-                    potential_prompts.append(potential_prompt)
+            extracted = extract_comfy_prompt(data)      # TODO it might be better to extract pos/neg from what's linked to the KSampler
 
-        if "ksampler" in node_type:
-            if 'steps' in data['inputs']:  # Required for sorting
+            if extracted['positive'] and not result.get('positive'):
+                result['positive'] = extracted['positive']
+
+            if extracted.get('negative') is not None:
+                if extracted['negative'] == "":
+                    empty_negative = True
+                elif not result.get('negative'):
+                    result['negative'] = extracted['negative']
+
+            if extracted['text']:
+                title = data.get('_meta', {}).get('title', '').lower()
+                text_val = extracted['text']
+
+                # If the title contains "positive" or "negative" it can easily be categorized
+                if "positive" in title and not result.get('positive'):
+                    result['positive'] = text_val
+                elif "negative" in title:
+                    if text_val == "":
+                        empty_negative = True
+                    elif not result.get('negative'):
+                        result['negative'] = text_val
+                else:
+                    if text_val:
+                        potential_prompts.append(text_val)
+
+        if "ksampler" in node_type or "videosampler" in node_type:
+            if "steps" in data['inputs']:  # Required for sorting
+                if isinstance(data['inputs']['steps'], list):
+                    data['inputs']['steps'] = resolve_linked_node(data['inputs']['steps'], nodes)
+
                 ksamplers.append(data['inputs'])
 
-        model_keywords = ['checkpoint', 'unet', 'gguf', 'clip', 'model']    # TODO e.g. priority of wan over t5xxl
+        model_keywords = ['checkpoint', 'unet', 'gguf', 'model']
         if node_type not in ['vae', 'image', 'video']:
             if "load" in node_type and any(name in node_type for name in model_keywords):
+                print(node_type)
                 # Just using the first viable result for now
                 if not result.get('model'):
-                    model = next((v for k, v in data['inputs'].items() if "name" in k), None)
+                    model = next((v for k, v in data['inputs'].items() if "name" in k or "model" in k), None)
                     if model:
                         result['model'] = model.split('\\')[-1]
 
-        if "latentimage" in node_type and not result['size']:
+        is_empty_latent = "latent" in node_type and "empty" in node_type
+        is_resizer = any(kw in node_type for kw in ["imagetovideolatent", "imageresize"])
+        if (is_empty_latent or is_resizer) and not result['size']:
             width = data['inputs'].get('width')
             height = data['inputs'].get('height')
             if width and height:
@@ -164,21 +237,16 @@ def extract_comfy_metadata(image_path: str, filetype: str = 'png', verbose: bool
     # The longest text probably is the positive prompt. If found already, it's probably the negative prompt
     potential_prompts = sorted(potential_prompts, key=lambda x: len(x), reverse=True)
     if potential_prompts:
-        if not result.get('positive') and not result.get('negative'):
-            result['positive'] = potential_prompts[0]
-            if len(potential_prompts) > 1:
-                result['negative'] = potential_prompts[1]
         if not result.get('positive'):
-            result['positive'] = potential_prompts[0]
-        if not result.get('negative'):
-            result['negative'] = potential_prompts[0]
+            result['positive'] = potential_prompts.pop(0)
+        if not result.get('negative') and not empty_negative:
+            result['negative'] = potential_prompts.pop(0)
 
     # The Ksampler with the highest number of steps probably is the main Ksampler, refiners/upscale typically use fewer steps
     ksamplers = sorted(ksamplers, key=lambda x: x.get('steps', 0), reverse=True)
     if ksamplers:
         result['steps'] = ksamplers[0].get('steps')
-        result['sampler'] = ksamplers[0].get('sampler')
-        result['sampler'] = ksamplers[0].get('sampler_name')
+        result['sampler'] = ksamplers[0].get('sampler') or ksamplers[0].get('sampler_name')
         result['scheduler'] = ksamplers[0].get('scheduler')
         result['cfg'] = ksamplers[0].get('cfg')
         result['seed'] = ksamplers[0].get('seed')
@@ -186,8 +254,9 @@ def extract_comfy_metadata(image_path: str, filetype: str = 'png', verbose: bool
     return result
 
 
-def extract_comfy_prompt(node_data: dict) -> str | None:
-    inputs = node_data['inputs']
+def extract_comfy_prompt(node_data: dict) -> dict:
+    inputs = node_data.get('inputs', {})
+    extracted: dict[str, str | None] = {'positive': None, 'negative': None, 'text': None}
 
     def get_str(key):  # Helper to ignore lists and safely strip
         val = inputs.get(key)
@@ -197,34 +266,48 @@ def extract_comfy_prompt(node_data: dict) -> str | None:
 
     text = get_str('text')
     if text:
-        return text
+        extracted['text'] = text
+        return extracted
 
     # CLIPTextEncodeSDXL
     text_g = get_str('text_g')
     text_l = get_str('text_l')
     if text_g or text_l:
-        return f"{text_g} {text_l}"
+        extracted['text'] = text_g if text_g == text_l else f"{text_g} {text_l}".strip()
+        return extracted
 
     # CLIPTextEncodeFlux
     clip_l = get_str('clip_l')
     t5xxl = get_str('t5xxl')
     if clip_l or t5xxl:
-        return f"{clip_l} {t5xxl}"
+        extracted['text'] = clip_l if clip_l == t5xxl else f"{clip_l} {t5xxl}".strip()
+        return extracted
 
     # easy positive/easy negative
     positive = get_str('positive')
     if positive:
-        return positive
+        extracted['positive'] = positive
+        return extracted
     negative = get_str('negative')
     if negative:
-        return negative
+        extracted['negative'] = negative
+        return extracted
+
+    # WAN (dual prompt node)
+    pos_prompt = get_str('positive_prompt')
+    neg_prompt = get_str('negative_prompt')
+    if pos_prompt or neg_prompt:
+        extracted['positive'] = pos_prompt or None
+        extracted['negative'] = neg_prompt or None
+        return extracted
 
     # TextEncodeQwenImageEdit & TextEncodeZImageOmni & probably others
     prompt = get_str('prompt')
     if prompt:
-        return prompt
+        extracted['text'] = prompt
+        return extracted
 
-    return None
+    return extracted
 
 
 def format_comfy_parameters(parameters: dict) -> str:
