@@ -22,51 +22,75 @@ class MetadataOption(Enum):
     SIZE = 6
 
 
-def extract_image_metadata(image_path: str, filetype: str = 'png', verbose: bool = False) -> dict | None:
+def load_file(file_path: str, verbose: bool = False) -> dict | None:
     try:
-        if filetype == 'png':
-            with Image.open(image_path) as img:
+        if file_path.endswith('.png'):
+            with Image.open(file_path) as img:
                 if hasattr(img, 'info'):
                     metadata = img.info
                 else:
                     if verbose:
-                        print(f"No info attribute found in {image_path}")
+                        print(f"No info attribute found in {file_path}")
                     return None
 
-        elif filetype == 'jpg':
-            img = piexif.load(image_path)
+        elif file_path.endswith('.jpg') or file_path.endswith('.jpeg'):
+            img = piexif.load(file_path)
             try:
                 metadata = piexif.helper.UserComment.load(img["Exif"][piexif.ExifIFD.UserComment])
             except KeyError:  # no exif data
                 if verbose:
-                    print(f"No metadata found for {image_path}")
+                    print(f"No metadata found for {file_path}")
                 return None
+        elif file_path.endswith('.mp4'):
+            try:
+                with av.open(file_path) as container:
+                    metadata = container.metadata
+                    comment_str = metadata.get('comment')       # Only works with Comfy
+                    # TODO is comment not always available in Comfy?
+                    nodes = json.loads(comment_str)
+
+                    return nodes
+
+            except json.JSONDecodeError:
+                pass
         else:
             raise ValueError("Invalid image type")
 
         return metadata
 
-    except Exception:   # TODO
+    except Exception as e:
+        if verbose:
+            print(f"Error processing {file_path}: {e}")
         return None
 
 
+def extract_metadata(file_path: str, verbose: bool = False):
+    metadata = load_file(file_path, verbose)
+    if metadata.get('parameters'):      # A1111
+        return extract_a1111_metadata(metadata)[0]      # TODO always full prompt for now
 
+    elif metadata.get('prompt'):        # ComfyUI
+        nodes = json.loads(metadata.get('prompt'))
+        if isinstance(nodes, str):
+            nodes = json.loads(nodes)
+        return extract_comfy_metadata(nodes)
 
-def extract_a1111_metadata(image_path: str, filetype: str = 'png', verbose: bool = False
-                           ) -> Tuple[str, str, str, str, str, str, str, str]:
+    else:
+        if verbose:
+            print(f"No metadata found in {file_path}")
+        return None
+
+def extract_a1111_metadata(metadata: dict) -> Tuple[str, str, str, str, str, str, str, str]:
     """
     Extract metadata from png or jpg image file.
 
     Args:
-        image_path: Path to the image file
-        filetype: Type of image file ('png' or 'jpg')
-        verbose: Whether to print verbose information
+        metadata: Metadata dictionary extracted from image
 
     Returns:
         A tuple of (parameters, positive, negative, steps, sampler, scheduler, cfg, size)
         or None if metadata couldn't be extracted.
     """
-    metadata = extract_image_metadata(image_path, filetype, verbose)
     parameters = metadata.get('parameters', '')
     if not parameters:
         return '', '', '', '', '', '', '', ''
@@ -101,39 +125,6 @@ def extract_a1111_metadata(image_path: str, filetype: str = 'png', verbose: bool
     return parameters, positive, negative, steps, sampler, scheduler, cfg, size
 
 
-def load_comfy_image_workflow(file_path: str, filetype: str = 'png', verbose: bool = False) -> dict:
-    metadata = extract_image_metadata(file_path, filetype, verbose)
-    nodes = json.loads(metadata.get('prompt'))
-
-    return nodes if nodes else None
-
-
-def load_comfy_video_workflow(video_path: str, filetype: str = 'mp4', verbose: bool = False) -> dict:
-    try:
-        with av.open(video_path) as container:
-            metadata = container.metadata
-            comment_str = metadata.get('comment')
-
-            if not comment_str:
-                return None
-
-            nodes = json.loads(comment_str)
-            prompt = nodes.get('prompt')
-
-            if not prompt:
-                return None
-
-            if isinstance(prompt, str):
-                return json.loads(prompt)
-
-            return prompt
-
-    except json.JSONDecodeError:
-        pass
-
-    return None
-
-
 def resolve_linked_node(link: list, nodes: dict) -> int:
     try:
         target_id = str(link[0])
@@ -150,7 +141,7 @@ def resolve_linked_node(link: list, nodes: dict) -> int:
 
     return 0
 
-def extract_comfy_metadata(file_path: str, filetype: str = 'png', verbose: bool = False) -> dict:
+def extract_comfy_metadata(nodes: dict) -> str:
     result = {
         'positive': "",
         'negative': "",
@@ -162,13 +153,6 @@ def extract_comfy_metadata(file_path: str, filetype: str = 'png', verbose: bool 
         'seed': "",
         'model': ""
     }
-
-    if filetype in ['png', 'jpg']:
-        nodes = load_comfy_image_workflow(file_path, filetype, verbose)
-    elif filetype == 'mp4':
-        nodes = load_comfy_video_workflow(file_path, filetype, verbose)
-    else:
-        return {}
 
     if not nodes:
         return {}
@@ -251,7 +235,7 @@ def extract_comfy_metadata(file_path: str, filetype: str = 'png', verbose: bool 
         result['cfg'] = ksamplers[0].get('cfg')
         result['seed'] = ksamplers[0].get('seed')
 
-    return result
+    return format_comfy_parameters(result)
 
 
 def extract_comfy_prompt(node_data: dict) -> dict:
@@ -356,7 +340,7 @@ def get_datalist(
         process: bool = True,
         amount: Optional[int] = None,
         verbose: bool = False
-) -> List[str]:
+) -> List[str]:     # TODO outdated
     """
     Selects a random sample of images and extracts their metadata.
 
@@ -402,9 +386,11 @@ def get_datalist(
                     print(f"[{i + 1}/{len(dirs_to_process)}] Processing {dir}")
 
                 if file.endswith('.png') and not file.endswith('_thumbnail.png'):
-                    metadata_result = extract_image_metadata(os.path.join(dir, file), filetype='png', verbose=verbose)
+                    metadata_result = load_file(os.path.join(dir, file), verbose=verbose)
                 elif file.endswith('.jpg'):
-                    metadata_result = extract_image_metadata(os.path.join(dir, file), filetype='jpg', verbose=verbose)
+                    metadata_result = load_file(os.path.join(dir, file), verbose=verbose)
+                elif file.endswith('.mp4'):
+                    pass        # TODO
                 else:
                     continue
 
@@ -478,7 +464,7 @@ def add_lora_as_tags(image_data: str, strip_version: bool = False) -> List[str]:
     Extracts LoRA tags from metadata string, optionally stripping version info.
 
     Args:
-        image_data: Image metadata containing LoRA tags
+        image_data: Image metadata (positive/negative prompt) containing LoRA tags
         strip_version: Whether to strip version information from LoRA tags
 
     Returns:
@@ -536,10 +522,13 @@ def add_metadata_to_json(
         dirs.sort(key=lambda d: os.path.getctime(os.path.join(root, d)), reverse=True)
 
         for file in files:
-            is_png = file.endswith('.png') and not file.endswith('_thumbnail.png')
-            is_jpg = file.endswith('.jpg') or file.endswith('.jpeg')
+            valid_formats = ('.png', '.jpg', '.jpeg', '.mp4')
 
-            if not (is_png or is_jpg):
+            if not file.endswith(valid_formats):
+                if verbose:
+                    print(f"Unsupported file format for {file}, skipping.")
+                continue
+            if file.endswith('_thumbnail.png'):
                 continue
 
             if skipped_count < offset:
@@ -547,21 +536,8 @@ def add_metadata_to_json(
                 continue
 
             try:
-                if is_png:
-                    parameters = extract_a1111_metadata(os.path.join(root, file), filetype='png', verbose=verbose)[
-                        option.value]
-                    if not parameters:  # TODO write a general extract_metadata that checks for a1111/comfy keys
-                        parameters = format_comfy_parameters(
-                            extract_comfy_metadata(os.path.join(root, file), filetype='png', verbose=verbose))
-                        # TODO currently doesnt support option.value
-                elif is_jpg:
-                    parameters = extract_a1111_metadata(os.path.join(root, file), filetype='jpg', verbose=verbose)[
-                        option.value]
-                    if not parameters:
-                        parameters = format_comfy_parameters(
-                            extract_comfy_metadata(os.path.join(root, file), filetype='jpg', verbose=verbose))
-                else:
-                    continue  # skip any other files
+                # TODO currently doesnt support option.value
+                parameters = extract_metadata(os.path.join(root, file), verbose=verbose)
             except TypeError:
                 # parameters is None if image has no metadata
                 continue
@@ -647,3 +623,7 @@ if __name__ == '__main__':
                          verbose=True,
                          add_lora_tags=True,
                          strip_version=True)
+    # print(extract_comfy_metadata(file_path="D:\\AI\\StableDiffusion.library\\images\\MJA2ILUCKC64X.info\\ComfyUI_00007_.png", verbose=True))
+    print(
+        extract_metadata("D:\\AI\\StableDiffusion.library\\images\\MHEU204AWQE24.info\\WanVideo2_2_I2V_00123.mp4",
+                         verbose=True))
