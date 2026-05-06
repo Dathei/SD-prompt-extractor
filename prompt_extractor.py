@@ -66,75 +66,85 @@ def load_file(file_path: str, verbose: bool = False) -> dict | None:
         return None
 
 
-def extract_metadata(file_path: str, verbose: bool = False):
+def extract_metadata(file_path: str, verbose: bool = False) -> dict:
     metadata = load_file(file_path, verbose)
 
     if not metadata:
         if verbose:
             print(f"No metadata found in {file_path}")
-        return None
+        return {}
 
     if metadata.get('parameters'):      # A1111
-        return extract_a1111_metadata(metadata)[0]      # TODO always full prompt for now
+        return extract_a1111_metadata(metadata)      # TODO always full prompt for now
 
     elif metadata.get('prompt'):        # ComfyUI
         nodes = json.loads(metadata.get('prompt'))
         if isinstance(nodes, str):
             nodes = json.loads(nodes)
-        print(nodes)
         return extract_comfy_metadata(nodes)
 
     else:
         if verbose:
             print(f"Unknown metadata type found in {file_path}")
-        return None
+        return {}
 
-def extract_a1111_metadata(metadata: dict) -> Tuple[str, str, str, str, str, str, str, str]:
-    """
-    Extract metadata from png or jpg image file.
+def extract_a1111_metadata(metadata: dict) -> dict:
+    result = {
+        'full_prompt': "",
+        'positive': "",
+        'negative': "",
+        'steps': "",
+        'sampler': "",
+        'scheduler': "",
+        'cfg': "",
+        'size': "",
+        'seed': "",
+        'model': "",
+        'loras': {}
+    }
 
-    Args:
-        metadata: Metadata dictionary extracted from image
-
-    Returns:
-        A tuple of (parameters, positive, negative, steps, sampler, scheduler, cfg, size)
-        or None if metadata couldn't be extracted.
-    """
     parameters = metadata.get('parameters', '')
     if not parameters:
-        return '', '', '', '', '', '', '', ''
+        return result
 
-    positive_end = parameters.find("Negative")
-    positive = parameters[:positive_end].strip()
+    result['full_prompt'] = parameters.strip()
 
-    negative_start = parameters.find("Negative prompt: ")
-    negative_end = parameters.find("Steps")
-    negative = parameters[negative_start:negative_end].strip()
+    # Split prompts and settings
+    parts = parameters.split('\nSteps: ')
 
-    steps_start = parameters.find("Steps: ")
-    steps_end = parameters.find(", Sampler")
-    steps = parameters[steps_start:steps_end].strip()
+    if len(parts) < 2:
+        # There are no settings
+        return result
 
-    sampler_start = parameters.find(", Sampler: ")
-    sampler_end = parameters.find(", Schedule type")
-    sampler = parameters[sampler_start:sampler_end].strip()
+    prompts_part = parts[0]
+    settings_part = "Steps: " + parts[1]
 
-    scheduler_start = parameters.find("Schedule type: ")
-    scheduler_end = parameters.find(", CFG")
-    scheduler = parameters[scheduler_start:scheduler_end].strip()
+    if "Negative prompt:" in prompts_part:
+        pos, neg = prompts_part.split('Negative prompt:')
+        result['positive'] = pos.strip()
+        result['negative'] = neg.strip()
+    else:
+        result['positive'] = prompts_part.strip()
 
-    cfg_start = parameters.find(", CFG scale: ")
-    cfg_end = parameters.find(", Seed")
-    cfg = parameters[cfg_start:cfg_end].strip()
+    def get_setting(key: str) -> str:
+        match = re.search(fr"{key}:\s*([^,]+)", settings_part)
+        return match.group(1).strip() if match else ""
 
-    size_start = parameters.find("Size: ")
-    size_end = parameters.find(", Model hash")
-    size = parameters[size_start:size_end].strip()
+    result['steps'] = get_setting("Steps")
+    result['sampler'] = get_setting("Sampler")
+    result['scheduler'] = get_setting("Schedule type")
+    result['cfg'] = get_setting("CFG scale")
+    result['seed'] = get_setting("Seed")
+    result['size'] = get_setting("Size")
+    result['model'] = get_setting("Model")
 
-    return parameters, positive, negative, steps, sampler, scheduler, cfg, size
+    lora_matches = re.findall(r"<lora:([^:]+):([^>]+)>", parameters)
+    result['loras'] = {name: strength for name, strength in lora_matches}
+
+    return result
 
 
-def resolve_linked_node(link: list, nodes: dict) -> int:
+def _resolve_linked_node(link: list, nodes: dict) -> int:
     try:
         target_id = str(link[0])
         target_node = nodes.get(target_id, {})
@@ -150,7 +160,8 @@ def resolve_linked_node(link: list, nodes: dict) -> int:
 
     return 0
 
-def extract_comfy_metadata(nodes: dict) -> str:
+def extract_comfy_metadata(nodes: dict) -> dict:
+    active_loras = {}  # name: strength
     result = {
         'positive': "",
         'negative': "",
@@ -160,7 +171,8 @@ def extract_comfy_metadata(nodes: dict) -> str:
         'cfg': "",
         'size': "",
         'seed': "",
-        'model': ""
+        'model': "",
+        'loras': active_loras
     }
 
     if not nodes:
@@ -207,11 +219,11 @@ def extract_comfy_metadata(nodes: dict) -> str:
         if "ksampler" in node_type or "videosampler" in node_type:
             if "steps" in data['inputs']:  # Required for sorting
                 if isinstance(data['inputs']['steps'], list):
-                    data['inputs']['steps'] = resolve_linked_node(data['inputs']['steps'], nodes)
+                    data['inputs']['steps'] = _resolve_linked_node(data['inputs']['steps'], nodes)
 
                 ksamplers.append(data['inputs'])
 
-        # Look for model
+        # Look for the model
         model_keywords = ['checkpoint', 'unet', 'gguf', 'model']
         if node_type not in ['vae', 'image', 'video']:
             if "load" in node_type and any(name in node_type for name in model_keywords):
@@ -221,7 +233,7 @@ def extract_comfy_metadata(nodes: dict) -> str:
                     if model:
                         result['model'] = model.split('\\')[-1]
 
-        # Look for EmptyLatent for resolution
+        # Look for EmptyLatent to get the resolution
         # TODO also look for resolution node
         is_empty_latent = "latent" in node_type and "empty" in node_type
         is_resizer = any(kw in node_type for kw in ["imagetovideolatent", "imageresize"])
@@ -236,26 +248,29 @@ def extract_comfy_metadata(nodes: dict) -> str:
         if "lora" in node_type:
             lora_name = data.get('inputs', {}).get('lora_name')
             lora_strength = data.get('inputs', {}).get('strength_model')
-            if lora_name:
+            if lora_name and float(lora_strength) != 0.0:
                 lora_name = lora_name.split('\\')[-1]
-                print(lora_name, lora_strength)
+                lora_name = lora_name.split('.')[0]
+                active_loras[lora_name] = lora_strength
 
             elif data.get('inputs', {}).get('lora_1'):
                 for k, v in data['inputs'].items():
                     if k.startswith('lora'):
-                        lora_name = v.get('lora').split('\\')[-1]
-                        lora_strength = v.get('strength')
-                        is_enabled = v.get('on')
-                        if is_enabled:
-                            print(lora_name, lora_strength, is_enabled)
-
+                        lora_name = v.get('lora')
+                        if lora_name:
+                            lora_name = lora_name.split('\\')[-1]
+                            lora_name = lora_name.split('.')[0]
+                            lora_strength = v.get('strength')
+                            is_enabled = v.get('on')
+                            if is_enabled:
+                                active_loras[lora_name] = lora_strength
 
     # The longest text probably is the positive prompt. If found already, it's probably the negative prompt
     potential_prompts = sorted(potential_prompts, key=lambda x: len(x), reverse=True)
     if potential_prompts:
         if not result.get('positive'):
             result['positive'] = potential_prompts.pop(0)
-        if not result.get('negative') and not empty_negative:
+        if not result.get('negative') and not empty_negative and potential_prompts:
             result['negative'] = potential_prompts.pop(0)
 
     # The Ksampler with the highest number of steps probably is the main Ksampler, refiners/upscale typically use fewer steps
@@ -267,7 +282,7 @@ def extract_comfy_metadata(nodes: dict) -> str:
         result['cfg'] = ksamplers[0].get('cfg')
         result['seed'] = ksamplers[0].get('seed')
 
-    return format_comfy_parameters(result)
+    return result
 
 
 def extract_comfy_prompt(node_data: dict) -> dict:
@@ -336,9 +351,14 @@ def format_comfy_parameters(parameters: dict) -> str:
     seed = parameters.get('seed', '')
     size = parameters.get('size', '')
     model_name = parameters.get('model', '')
-    # TODO add loras with strength
+    loras = parameters.get('loras', {})
+    loras_str = "Loras:\n"
+    if loras:
+        for k, v in loras.items():
+            loras_str += f"{k}: {v}\n"
 
     parameters_str = f"""{positive}\n
+{loras_str if loras else ''}
 Negative prompt: {negative}\n
 Steps: {steps}, Sampler: {sampler}, Scheduler: {scheduler}, CFG scale: {cfg}, Seed: {seed}, Size: {size}, Model: {model_name}"""
 
@@ -492,34 +512,16 @@ def write_to_file(
     print(f"Data written to {output_path}")
 
 
-def add_lora_as_tags(image_data: str, strip_version: bool = False) -> List[str]:  # TODO Comfy Lora
-    """
-    Extracts LoRA tags from metadata string, optionally stripping version info.
-
-    Args:
-        image_data: Image metadata (positive/negative prompt) containing LoRA tags
-        strip_version: Whether to strip version information from LoRA tags
-
-    Returns:
-        List of LoRA tags
-    """
-    lora_tags = re.findall(r"<lora:(.+?):.*?>", image_data)
-    if not lora_tags:
-        return []
-
-    lora_tags = ["lora: " + lora for lora in lora_tags if lora]  # prepend "lora: " to each tag
+def add_loras_as_tags(lora_dict: dict, strip_version: bool = False) -> list:
+    tags = []
     version_pattern = r"(?:[_-][Vv]?|[Vv])?\d+(?:-\d+)?$"
 
-    # print(f"Found lora tags: {lora_tags}")
-    if strip_version:
-        stripped_loras = []
-        for lora in lora_tags:
-            stripped_lora = re.sub(version_pattern, "", lora)
-            # if lora != stripped_lora:
-            #     print(f"{lora} -> {stripped_lora}")
-            stripped_loras.append(stripped_lora)
-        return stripped_loras
-    return lora_tags
+    for lora_name in lora_dict.keys():
+        if strip_version:
+            lora_name = re.sub(version_pattern, "", lora_name)
+        tags.append("lora: " + lora_name)
+
+    return tags
 
 
 def add_metadata_to_json(
@@ -557,11 +559,9 @@ def add_metadata_to_json(
         for file in files:
             valid_formats = ('.png', '.jpg', '.jpeg', '.mp4')
 
-            if not file.endswith(valid_formats):
+            if not file.endswith(valid_formats) or file.endswith('_thumbnail.png'):
                 # if verbose:
                 #     print(f"Unsupported file format for {file}, skipping.")
-                continue
-            if file.endswith('_thumbnail.png'):
                 continue
 
             if skipped_count < offset:
@@ -571,11 +571,12 @@ def add_metadata_to_json(
             try:
                 # TODO currently doesnt support option.value
                 parameters = extract_metadata(os.path.join(root, file), verbose=verbose)
-            except TypeError:
-                # parameters is None if image has no metadata
+            except Exception as e:
+                if verbose:
+                    print(f"Failed to extract metadata from {file}: {e}")
                 continue
 
-            if parameters is None or parameters.strip() == "":
+            if parameters is None:
                 continue
 
             json_path = os.path.join(root, 'metadata.json')
@@ -595,29 +596,37 @@ def add_metadata_to_json(
                         with open(json_path, 'r', encoding='latin-1') as f:
                             data = json.load(f)
 
-                if overwrite or not data.get('annotation'):  # overwrite or empty annotation
-                    parameters = re.sub(r",(\w)", r", \1", parameters)  # Add space after comma
-                    if parameters:
-                        data['annotation'] = parameters
+                if overwrite or not data.get('annotation'):     # overwrite or empty annotation
+                    prompt = parameters.get('full_prompt')      # A1111 prompt
+                    if not prompt:
+                        prompt = format_comfy_parameters(parameters)
+
+                    prompt = re.sub(r",(\w)", r", \1", prompt)  # Add space after commas
+                    if prompt:
+                        data['annotation'] = prompt
                         update_json = True
 
                 if add_lora_tags:
-                    added_tags = False
-                    new_lora_tags = add_lora_as_tags(parameters, strip_version=strip_version)
-                    existing_tags = data.get('tags', [])
-                    existing_tags_set = set(existing_tags)
-                    for tag in new_lora_tags:
-                        if tag not in existing_tags_set:
-                            existing_tags.append(tag)
-                            existing_tags_set.add(tag)
-                            added_tags = True
-                    if added_tags:
-                        data['tags'] = existing_tags
-                        update_json = True
+                    new_lora_tags = add_loras_as_tags(parameters.get('loras', {}), strip_version=strip_version)
+
+                    if new_lora_tags:
+                        existing_tags = data.get('tags', [])
+                        existing_tags_set = set(existing_tags)
+                        added_tags = False
+
+                        for tag in new_lora_tags:
+                            if tag not in existing_tags_set:
+                                existing_tags.append(tag)
+                                existing_tags_set.add(tag)
+                                added_tags = True
+
+                        if added_tags:
+                            data['tags'] = existing_tags
+                            update_json = True
 
                 if update_json:
                     with open(json_path, 'w', encoding='utf-8') as f:
-                        json.dump(data, f, ensure_ascii=False)
+                        json.dump(data, f, ensure_ascii=False, indent=2)
 
             except FileNotFoundError:
                 if verbose:
@@ -656,7 +665,4 @@ if __name__ == '__main__':
                          verbose=True,
                          add_lora_tags=True,
                          strip_version=True)
-    # print(extract_comfy_metadata(file_path="D:\\AI\\StableDiffusion.library\\images\\MJA2ILUCKC64X.info\\ComfyUI_00007_.png", verbose=True))
-    # print(extract_metadata("D:\\AI\\StableDiffusion.library\\images\\MHEU204AWQE24.info\\WanVideo2_2_I2V_00123.mp4", verbose=True))
-    # print(extract_metadata("D:\\AI\\StableDiffusion2.library\\images\\MOU6JQ0OWLW1V.info\\ZIT_00343_.png",
-    #                        verbose=True))
+
