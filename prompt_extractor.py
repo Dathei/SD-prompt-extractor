@@ -3,6 +3,8 @@ import re
 import os
 import json
 import argparse
+from faulthandler import is_enabled
+
 import numpy as np
 import av
 from PIL import Image
@@ -39,13 +41,13 @@ def load_file(file_path: str, verbose: bool = False) -> dict | None:
                 metadata = piexif.helper.UserComment.load(img["Exif"][piexif.ExifIFD.UserComment])
             except KeyError:  # no exif data
                 if verbose:
-                    print(f"No metadata found for {file_path}")
+                    print(f"No metadata found in {file_path}")
                 return None
         elif file_path.endswith('.mp4'):
             try:
                 with av.open(file_path) as container:
                     metadata = container.metadata
-                    comment_str = metadata.get('comment')       # Only works with Comfy
+                    comment_str = metadata.get('comment') or metadata.get('COMMENT')       # Only works with Comfy
                     # TODO is comment not always available in Comfy?
                     nodes = json.loads(comment_str)
 
@@ -66,6 +68,12 @@ def load_file(file_path: str, verbose: bool = False) -> dict | None:
 
 def extract_metadata(file_path: str, verbose: bool = False):
     metadata = load_file(file_path, verbose)
+
+    if not metadata:
+        if verbose:
+            print(f"No metadata found in {file_path}")
+        return None
+
     if metadata.get('parameters'):      # A1111
         return extract_a1111_metadata(metadata)[0]      # TODO always full prompt for now
 
@@ -73,11 +81,12 @@ def extract_metadata(file_path: str, verbose: bool = False):
         nodes = json.loads(metadata.get('prompt'))
         if isinstance(nodes, str):
             nodes = json.loads(nodes)
+        print(nodes)
         return extract_comfy_metadata(nodes)
 
     else:
         if verbose:
-            print(f"No metadata found in {file_path}")
+            print(f"Unknown metadata type found in {file_path}")
         return None
 
 def extract_a1111_metadata(metadata: dict) -> Tuple[str, str, str, str, str, str, str, str]:
@@ -155,7 +164,7 @@ def extract_comfy_metadata(nodes: dict) -> str:
     }
 
     if not nodes:
-        return {}
+        return ""
 
     potential_prompts = []
     ksamplers = []
@@ -163,8 +172,8 @@ def extract_comfy_metadata(nodes: dict) -> str:
 
     for node_id, data in nodes.items():
         node_type = data['class_type'].lower()
-        print(f"{node_id} node_type: {node_type}, data: {data}")
 
+        # Look for positive/negative prompt
         if "textencode" in node_type or node_type in ["easy positive", "easy negative"]:
             extracted = extract_comfy_prompt(data)      # TODO it might be better to extract pos/neg from what's linked to the KSampler
 
@@ -193,6 +202,8 @@ def extract_comfy_metadata(nodes: dict) -> str:
                     if text_val:
                         potential_prompts.append(text_val)
 
+        # Look for KSampler for settings
+        # TODO more robust search that finds the actual used one
         if "ksampler" in node_type or "videosampler" in node_type:
             if "steps" in data['inputs']:  # Required for sorting
                 if isinstance(data['inputs']['steps'], list):
@@ -200,16 +211,18 @@ def extract_comfy_metadata(nodes: dict) -> str:
 
                 ksamplers.append(data['inputs'])
 
+        # Look for model
         model_keywords = ['checkpoint', 'unet', 'gguf', 'model']
         if node_type not in ['vae', 'image', 'video']:
             if "load" in node_type and any(name in node_type for name in model_keywords):
-                print(node_type)
                 # Just using the first viable result for now
                 if not result.get('model'):
                     model = next((v for k, v in data['inputs'].items() if "name" in k or "model" in k), None)
                     if model:
                         result['model'] = model.split('\\')[-1]
 
+        # Look for EmptyLatent for resolution
+        # TODO also look for resolution node
         is_empty_latent = "latent" in node_type and "empty" in node_type
         is_resizer = any(kw in node_type for kw in ["imagetovideolatent", "imageresize"])
         if (is_empty_latent or is_resizer) and not result['size']:
@@ -217,6 +230,25 @@ def extract_comfy_metadata(nodes: dict) -> str:
             height = data['inputs'].get('height')
             if width and height:
                 result['size'] = f"{width}x{height}"
+
+        # Look for Loras
+        # TODO check if node is actually connected
+        if "lora" in node_type:
+            lora_name = data.get('inputs', {}).get('lora_name')
+            lora_strength = data.get('inputs', {}).get('strength_model')
+            if lora_name:
+                lora_name = lora_name.split('\\')[-1]
+                print(lora_name, lora_strength)
+
+            elif data.get('inputs', {}).get('lora_1'):
+                for k, v in data['inputs'].items():
+                    if k.startswith('lora'):
+                        lora_name = v.get('lora').split('\\')[-1]
+                        lora_strength = v.get('strength')
+                        is_enabled = v.get('on')
+                        if is_enabled:
+                            print(lora_name, lora_strength, is_enabled)
+
 
     # The longest text probably is the positive prompt. If found already, it's probably the negative prompt
     potential_prompts = sorted(potential_prompts, key=lambda x: len(x), reverse=True)
@@ -304,6 +336,7 @@ def format_comfy_parameters(parameters: dict) -> str:
     seed = parameters.get('seed', '')
     size = parameters.get('size', '')
     model_name = parameters.get('model', '')
+    # TODO add loras with strength
 
     parameters_str = f"""{positive}\n
 Negative prompt: {negative}\n
@@ -390,7 +423,7 @@ def get_datalist(
                 elif file.endswith('.jpg'):
                     metadata_result = load_file(os.path.join(dir, file), verbose=verbose)
                 elif file.endswith('.mp4'):
-                    pass        # TODO
+                    metadata_result = load_file(os.path.join(dir, file), verbose=verbose)   # TODO
                 else:
                     continue
 
@@ -525,8 +558,8 @@ def add_metadata_to_json(
             valid_formats = ('.png', '.jpg', '.jpeg', '.mp4')
 
             if not file.endswith(valid_formats):
-                if verbose:
-                    print(f"Unsupported file format for {file}, skipping.")
+                # if verbose:
+                #     print(f"Unsupported file format for {file}, skipping.")
                 continue
             if file.endswith('_thumbnail.png'):
                 continue
@@ -616,14 +649,14 @@ def add_metadata_to_json(
 if __name__ == '__main__':
     root = "D:\\AI\\StableDiffusion.library\\images"
     add_metadata_to_json(root,
-                         amount=5,
-                         offset=3,
+                         amount=50,
+                         offset=0,
                          overwrite=True,
                          option=MetadataOption.ALL,
                          verbose=True,
                          add_lora_tags=True,
                          strip_version=True)
     # print(extract_comfy_metadata(file_path="D:\\AI\\StableDiffusion.library\\images\\MJA2ILUCKC64X.info\\ComfyUI_00007_.png", verbose=True))
-    print(
-        extract_metadata("D:\\AI\\StableDiffusion.library\\images\\MHEU204AWQE24.info\\WanVideo2_2_I2V_00123.mp4",
-                         verbose=True))
+    # print(extract_metadata("D:\\AI\\StableDiffusion.library\\images\\MHEU204AWQE24.info\\WanVideo2_2_I2V_00123.mp4", verbose=True))
+    # print(extract_metadata("D:\\AI\\StableDiffusion2.library\\images\\MOU6JQ0OWLW1V.info\\ZIT_00343_.png",
+    #                        verbose=True))
