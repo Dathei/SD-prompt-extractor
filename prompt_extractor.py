@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 import re
 import os
+import sys
 import json
 import argparse
-from faulthandler import is_enabled
 
 import numpy as np
 import av
@@ -11,7 +11,7 @@ from PIL import Image
 import piexif
 import piexif.helper
 from enum import Enum
-from typing import List, Dict, Tuple, Optional, Union, Any
+from typing import Optional
 
 
 class MetadataOption(Enum):
@@ -22,7 +22,7 @@ class MetadataOption(Enum):
     SAMPLER = 4
     CFG = 5
     SIZE = 6
-
+    # TODO option for only prompts and only settings
 
 def load_file(file_path: str, verbose: bool = False) -> dict | None:
     try:
@@ -366,15 +366,6 @@ Steps: {steps}, Sampler: {sampler}, Scheduler: {scheduler}, CFG scale: {cfg}, Se
 
 
 def process_string(s: str) -> str:
-    """
-    Cleans up a string by removing unwanted characters and formatting to avoid wasting tokens
-
-    Args:
-        s: String to process
-
-    Returns:
-        Processed string
-    """
     s = re.sub(r"<.*?>", "", s)  # remove lora tags
     s = re.sub(r"\(", "", s)  # remove opening parentheses
     s = re.sub(r":[^)]*", "", s)  # remove emphasis
@@ -387,13 +378,25 @@ def process_string(s: str) -> str:
     return s.strip()
 
 
+def add_loras_as_tags(lora_dict: dict, strip_version: bool = False) -> list:
+    tags = []
+    version_pattern = r"(?:[_-][Vv]?|[Vv])?\d+(?:-\d+)?$"
+
+    for lora_name in lora_dict.keys():
+        if strip_version:
+            lora_name = re.sub(version_pattern, "", lora_name)
+        tags.append("lora: " + lora_name)
+
+    return tags
+
+
 def get_datalist(
         root_dir: str,
         option: MetadataOption = MetadataOption.POSITIVE_PROMPT,
         process: bool = True,
         amount: Optional[int] = None,
         verbose: bool = False
-) -> List[str]:     # TODO outdated
+) -> list:     # TODO outdated
     """
     Selects a random sample of images and extracts their metadata.
 
@@ -489,39 +492,24 @@ def write_to_file(
         process: Optional[bool] = True,
         amount: Optional[int] = None,
         verbose: Optional[bool] = False
-) -> None:
+) -> None:  # TODO add random as option
     """
-    Extract metadata and write to textfile
+    Extract metadata and write to a textfile
 
     Args:
         input_root: Root directory to search for images
         output_path: Path to write output to
         option: Metadata option to extract
-        process: If true, apply regex clean up for positive or negative prompts
+        process: If true, apply regex cleanup for positive or negative prompts
         amount: Amount of images to process, None for all
         verbose: Whether to print verbose information
     """
     data = get_datalist(input_root, option, process, amount, verbose=verbose)
-    with open(output_path, 'w') as file:
+    with open(output_path, 'w', encoding='utf-8') as file:
         for line in data:
-            if line:  # skips empty lines caused by filtering duplicates
-                try:
-                    file.write(line + "\n\n")
-                except UnicodeEncodeError:
-                    print(f"Error writing line: {line}")
+            if line:    # skips empty lines caused by filtering duplicates
+                file.write(line + "\n\n")
     print(f"Data written to {output_path}")
-
-
-def add_loras_as_tags(lora_dict: dict, strip_version: bool = False) -> list:
-    tags = []
-    version_pattern = r"(?:[_-][Vv]?|[Vv])?\d+(?:-\d+)?$"
-
-    for lora_name in lora_dict.keys():
-        if strip_version:
-            lora_name = re.sub(version_pattern, "", lora_name)
-        tags.append("lora: " + lora_name)
-
-    return tags
 
 
 def add_metadata_to_json(
@@ -665,4 +653,48 @@ if __name__ == '__main__':
                          verbose=True,
                          add_lora_tags=True,
                          strip_version=True)
+    parser = argparse.ArgumentParser(description="Metadata Extractor")
 
+    subparsers = parser.add_subparsers(dest="mode", required=True, help="Choose extraction mode")
+
+    eagle_parser = subparsers.add_parser("eagle", aliases=['e'], help="Write to Eagle JSON")
+
+    eagle_parser.add_argument("--dir", type=str, required=True, help="Path to process (root library or single .info folder)")
+    eagle_parser.add_argument("--amount", "-a", type=int, default=None, help="Amount of images to process. Keep empty for all")
+    eagle_parser.add_argument("--offset", "-o", type=int, default=0, help="Number of images to skip before starting to add metadata")
+    eagle_parser.add_argument("--overwrite", action="store_true", help="Overwrite existing annotations")
+    eagle_parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    eagle_parser.add_argument("--add_lora_tags", action="store_true", help="Add LoRAs as tags")
+    eagle_parser.add_argument("--strip_version", action="store_true", help="Strip version info from LoRA tags")
+
+    file_parser = subparsers.add_parser("file", aliases=['f'], help="Write to Text File")
+
+    file_parser.add_argument("--dir", type=str, required=True, help="Path to process")
+    file_parser.add_argument("--out", "-o", type=str, required=True, help="Output path")
+    file_parser.add_argument("--option", type=str, default="ALL", choices=[e.name for e in MetadataOption],
+                             help="Choose what to extract (e.g. ALL, POSITIVE_PROMPT)")
+    file_parser.add_argument("--process", "-p", action="store_true", help="String cleanup for positive and negative prompts")
+    file_parser.add_argument("--amount", "-a", type=int, default=None, help="Amount of images to add. Keep empty for all")
+    file_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+
+    args = parser.parse_args()
+
+    if args.mode in ['eagle', 'e']:
+        add_metadata_to_json(
+            root_dir=args.dir,
+            amount=args.amount,
+            offset=args.offset,
+            overwrite=args.overwrite,
+            verbose=args.verbose,
+            add_lora_tags=args.add_lora_tags,
+            strip_version=args.strip_version
+        )
+    elif args.mode in ['file', 'f']:
+        write_to_file(
+            input_root=args.dir,
+            output_path=args.out,
+            option=MetadataOption[args.option],
+            process=args.process,
+            amount=args.amount,
+            verbose=args.verbose,
+        )
