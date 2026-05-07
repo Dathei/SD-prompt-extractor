@@ -390,6 +390,28 @@ def add_loras_as_tags(lora_dict: dict, strip_version: bool = False) -> list:
     return tags
 
 
+def get_formatted_metadata(file_path: str, verbose: bool = False):
+    try:
+        # TODO currently doesnt support option.value
+        parameters = extract_metadata(file_path)
+
+        if parameters is None:
+            return None, None
+
+        prompt = parameters.get('full_prompt')                  # A1111 prompt
+        if not prompt:
+            prompt = format_comfy_parameters(parameters)        # ComfyUI prompt
+
+        prompt = re.sub(r",(\w)", r", \1", prompt)  # Add space after commas
+
+        return prompt, parameters.get('loras', {})
+
+    except Exception as e:
+        if verbose:
+            print(f"Failed to extract metadata from {file_path}: {e}")
+        return None, None
+
+
 def get_datalist(
         root_dir: str,
         option: MetadataOption = MetadataOption.POSITIVE_PROMPT,
@@ -544,30 +566,18 @@ def add_metadata_to_json(
         # sort by creation date, from newest to oldest
         dirs.sort(key=lambda d: os.path.getctime(os.path.join(root, d)), reverse=True)
 
-        for file in files:
-            valid_formats = ('.png', '.jpg', '.jpeg', '.mp4')
+        valid_formats = ('.png', '.jpg', '.jpeg', '.mp4')
 
+        for file in files:
             if not file.endswith(valid_formats) or file.endswith('_thumbnail.png'):
-                # if verbose:
-                #     print(f"Unsupported file format for {file}, skipping.")
                 continue
 
             if skipped_count < offset:
                 skipped_count += 1
                 continue
 
-            try:
-                # TODO currently doesnt support option.value
-                parameters = extract_metadata(os.path.join(root, file), verbose=verbose)
-            except Exception as e:
-                if verbose:
-                    print(f"Failed to extract metadata from {file}: {e}")
-                continue
-
-            if parameters is None:
-                continue
-
             json_path = os.path.join(root, 'metadata.json')
+            file_path = os.path.join(root, file)
             update_json = False
 
             try:
@@ -584,33 +594,33 @@ def add_metadata_to_json(
                         with open(json_path, 'r', encoding='latin-1') as f:
                             data = json.load(f)
 
-                if overwrite or not data.get('annotation'):     # overwrite or empty annotation
-                    prompt = parameters.get('full_prompt')      # A1111 prompt
-                    if not prompt:
-                        prompt = format_comfy_parameters(parameters)
+                needs_annotation = overwrite or not data.get('annotation')      # overwrite mode or empty annotation
+                if needs_annotation or add_lora_tags:
+                    # Extract metadata once only if needed
+                    prompt, loras = get_formatted_metadata(file_path, verbose=verbose)
 
-                    prompt = re.sub(r",(\w)", r", \1", prompt)  # Add space after commas
-                    if prompt:
-                        data['annotation'] = prompt
-                        update_json = True
-
-                if add_lora_tags:
-                    new_lora_tags = add_loras_as_tags(parameters.get('loras', {}), strip_version=strip_version)
-
-                    if new_lora_tags:
-                        existing_tags = data.get('tags', [])
-                        existing_tags_set = set(existing_tags)
-                        added_tags = False
-
-                        for tag in new_lora_tags:
-                            if tag not in existing_tags_set:
-                                existing_tags.append(tag)
-                                existing_tags_set.add(tag)
-                                added_tags = True
-
-                        if added_tags:
-                            data['tags'] = existing_tags
+                    if needs_annotation:
+                        if prompt:
+                            data['annotation'] = prompt
                             update_json = True
+
+                    if add_lora_tags and loras:
+                        new_lora_tags = add_loras_as_tags(loras, strip_version=strip_version)
+
+                        if new_lora_tags:
+                            existing_tags = data.get('tags', [])
+                            existing_tags_set = set(existing_tags)
+                            added_tags = False
+
+                            for tag in new_lora_tags:
+                                if tag not in existing_tags_set:
+                                    existing_tags.append(tag)
+                                    existing_tags_set.add(tag)
+                                    added_tags = True
+
+                            if added_tags:
+                                data['tags'] = existing_tags
+                                update_json = True
 
                 if update_json:
                     with open(json_path, 'w', encoding='utf-8') as f:
@@ -644,21 +654,11 @@ def add_metadata_to_json(
 
 
 if __name__ == '__main__':
-    root = "D:\\AI\\StableDiffusion.library\\images"
-    add_metadata_to_json(root,
-                         amount=50,
-                         offset=0,
-                         overwrite=True,
-                         option=MetadataOption.ALL,
-                         verbose=True,
-                         add_lora_tags=True,
-                         strip_version=True)
     parser = argparse.ArgumentParser(description="Metadata Extractor")
 
     subparsers = parser.add_subparsers(dest="mode", required=True, help="Choose extraction mode")
 
     eagle_parser = subparsers.add_parser("eagle", aliases=['e'], help="Write to Eagle JSON")
-
     eagle_parser.add_argument("--dir", type=str, required=True, help="Path to process (root library or single .info folder)")
     eagle_parser.add_argument("--amount", "-a", type=int, default=None, help="Amount of images to process. Keep empty for all")
     eagle_parser.add_argument("--offset", "-o", type=int, default=0, help="Number of images to skip before starting to add metadata")
@@ -667,8 +667,12 @@ if __name__ == '__main__':
     eagle_parser.add_argument("--add_lora_tags", action="store_true", help="Add LoRAs as tags")
     eagle_parser.add_argument("--strip_version", action="store_true", help="Strip version info from LoRA tags")
 
-    file_parser = subparsers.add_parser("file", aliases=['f'], help="Write to Text File")
+    api_parser = subparsers.add_parser("api", aliases=['a'], help="API mode: Extract metadata from a single file")
+    api_parser.add_argument("--file", "-f", type=str, required=True, help="Path to file")
+    api_parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    api_parser.add_argument("--strip_version", action="store_true", help="Strip version info from LoRA tags")
 
+    file_parser = subparsers.add_parser("file", aliases=['f'], help="Write to Text File")
     file_parser.add_argument("--dir", type=str, required=True, help="Path to process")
     file_parser.add_argument("--out", "-o", type=str, required=True, help="Output path")
     file_parser.add_argument("--option", type=str, default="ALL", choices=[e.name for e in MetadataOption],
@@ -698,3 +702,13 @@ if __name__ == '__main__':
             amount=args.amount,
             verbose=args.verbose,
         )
+    elif args.mode in ['api', 'a']:
+        prompt, loras = get_formatted_metadata(
+            file_path=args.file,
+            verbose=args.verbose,
+        )
+        output = {
+            "annotation": prompt,
+            "tags": add_loras_as_tags(loras, strip_version=args.strip_version) if loras else []
+        }
+        print(json.dumps(output))
