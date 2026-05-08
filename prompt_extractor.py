@@ -357,7 +357,7 @@ def format_comfy_parameters(parameters: dict) -> str:
     loras_str = "Loras:\n"
     if loras:
         for name, strength in loras.items():
-            loras_str += f"{name}: {strength:2.f}\n"
+            loras_str += f"{name}: {strength:.2f}\n"
 
     parameters_str = f"""{positive}\n
 {loras_str if loras else ''}
