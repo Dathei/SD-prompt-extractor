@@ -14,6 +14,8 @@ from enum import Enum
 from typing import Optional
 
 
+VALID_FORMATS = ('.png', '.jpg', '.jpeg', '.mp4')
+
 class MetadataOption(Enum):
     ALL = 0
     POSITIVE_PROMPT = 1
@@ -75,7 +77,7 @@ def extract_metadata(file_path: str, verbose: bool = False) -> dict:
         return {}
 
     if metadata.get('parameters'):      # A1111
-        return extract_a1111_metadata(metadata)      # TODO always full prompt for now
+        return extract_a1111_metadata(metadata)
 
     elif metadata.get('prompt'):        # ComfyUI
         nodes = json.loads(metadata.get('prompt'))
@@ -354,8 +356,8 @@ def format_comfy_parameters(parameters: dict) -> str:
     loras = parameters.get('loras', {})
     loras_str = "Loras:\n"
     if loras:
-        for k, v in loras.items():
-            loras_str += f"{k}: {v}\n"
+        for name, strength in loras.items():
+            loras_str += f"{name}: {strength:2.f}\n"
 
     parameters_str = f"""{positive}\n
 {loras_str if loras else ''}
@@ -385,7 +387,7 @@ def add_loras_as_tags(lora_dict: dict, strip_version: bool = False) -> list:
     for lora_name in lora_dict.keys():
         if strip_version:
             lora_name = re.sub(version_pattern, "", lora_name)
-        tags.append("lora: " + lora_name)
+        tags.append(f"lora: {lora_name}")
 
     return tags
 
@@ -403,6 +405,7 @@ def get_formatted_metadata(file_path: str, verbose: bool = False):
             prompt = format_comfy_parameters(parameters)        # ComfyUI prompt
 
         prompt = re.sub(r",(\w)", r", \1", prompt)  # Add space after commas
+        # TODO remove \n at the start
 
         return prompt, parameters.get('loras', {})
 
@@ -463,14 +466,10 @@ def get_datalist(
                 if verbose:
                     print(f"[{i + 1}/{len(dirs_to_process)}] Processing {dir}")
 
-                if file.endswith('.png') and not file.endswith('_thumbnail.png'):
-                    metadata_result = load_file(os.path.join(dir, file), verbose=verbose)
-                elif file.endswith('.jpg'):
-                    metadata_result = load_file(os.path.join(dir, file), verbose=verbose)
-                elif file.endswith('.mp4'):
-                    metadata_result = load_file(os.path.join(dir, file), verbose=verbose)   # TODO
-                else:
+                if not file.endswith(VALID_FORMATS) or file.endswith('_thumbnail.png'):
                     continue
+
+                metadata_result = load_file(os.path.join(dir, file), verbose=verbose)
 
                 metadata = metadata_result[option.value]
                 if not metadata:  # Skip empty metadata
@@ -566,10 +565,8 @@ def add_metadata_to_json(
         # sort by creation date, from newest to oldest
         dirs.sort(key=lambda d: os.path.getctime(os.path.join(root, d)), reverse=True)
 
-        valid_formats = ('.png', '.jpg', '.jpeg', '.mp4')
-
         for file in files:
-            if not file.endswith(valid_formats) or file.endswith('_thumbnail.png'):
+            if not file.endswith(VALID_FORMATS) or file.endswith('_thumbnail.png'):
                 continue
 
             if skipped_count < offset:
@@ -653,6 +650,34 @@ def add_metadata_to_json(
                 return
 
 
+def handle_api_command(folder_path: str, strip_version: bool = False):
+    file_to_process = folder_path
+
+    if os.path.isdir(folder_path):
+        found_file = None
+
+        for file in os.listdir(folder_path):
+            if file.endswith(VALID_FORMATS) and not file.endswith('_thumbnail.png'):
+                found_file = os.path.join(folder_path, file)
+                break
+
+        if not found_file:
+            print(json.dumps({"error": "No media file found in folder"}))
+            return
+
+        file_to_process = found_file
+
+    prompt, loras = get_formatted_metadata(
+        file_path=file_to_process,
+        verbose=False,
+    )
+    output = {
+        "annotation": prompt,
+        "tags": add_loras_as_tags(loras, strip_version=strip_version) if loras else []
+    }
+    print(json.dumps(output))
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Metadata Extractor")
 
@@ -669,7 +694,6 @@ if __name__ == '__main__':
 
     api_parser = subparsers.add_parser("api", aliases=['a'], help="API mode: Extract metadata from a single file")
     api_parser.add_argument("--file", "-f", type=str, required=True, help="Path to file")
-    api_parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     api_parser.add_argument("--strip_version", action="store_true", help="Strip version info from LoRA tags")
 
     file_parser = subparsers.add_parser("file", aliases=['f'], help="Write to Text File")
@@ -703,12 +727,7 @@ if __name__ == '__main__':
             verbose=args.verbose,
         )
     elif args.mode in ['api', 'a']:
-        prompt, loras = get_formatted_metadata(
-            file_path=args.file,
-            verbose=args.verbose,
+        handle_api_command(
+            folder_path=args.file,
+            strip_version=args.strip_version,
         )
-        output = {
-            "annotation": prompt,
-            "tags": add_loras_as_tags(loras, strip_version=args.strip_version) if loras else []
-        }
-        print(json.dumps(output))
