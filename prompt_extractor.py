@@ -4,8 +4,8 @@ import os
 import sys
 import json
 import argparse
-
-import numpy as np
+import math
+import numpy as np      # TODO remove
 import av
 from PIL import Image
 import piexif
@@ -18,13 +18,15 @@ VALID_FORMATS = ('.png', '.jpg', '.jpeg', '.mp4')
 
 class MetadataOption(Enum):
     ALL = 0
-    POSITIVE_PROMPT = 1
-    NEGATIVE_PROMPT = 2
-    STEPS = 3
-    SAMPLER = 4
-    CFG = 5
-    SIZE = 6
-    # TODO option for only prompts and only settings
+    PROMPT = 1
+    POSITIVE_PROMPT = 2
+    NEGATIVE_PROMPT = 3
+    SETTINGS = 4
+    STEPS = 5
+    SAMPLER = 6
+    SCHEDULER = 7
+    CFG = 8
+    SIZE = 9
 
 def load_file(file_path: str, verbose: bool = False) -> dict | None:
     try:
@@ -146,21 +148,90 @@ def extract_a1111_metadata(metadata: dict) -> dict:
     return result
 
 
-def _resolve_linked_node(link: list, nodes: dict) -> int:
+def _resolve_linked_node(link: list, nodes: dict, target_param: str = None, visited: set = None):
+    if visited is None:
+        visited = set()
+
+    if not isinstance(link, list) or len(link) < 1:
+        return link
+
+    target_id = str(link[0])
+
+    if target_id in visited:
+        return None
+    visited.add(target_id)
+
+    target_node = nodes.get(target_id, {})
+    inputs = target_node.get('inputs', {})
+    class_type = inputs.get('class', '').lower()
+
     try:
-        target_id = str(link[0])
-        target_node = nodes.get(target_id, {})
+        # Handle explicit value/primitives
+        if 'value' in inputs or 'primitive' in class_type:
+            value = inputs.get('value')
+            return _resolve_linked_node(value, nodes, target_param, visited) if isinstance(value, list) else value
 
-        for k, v in target_node.items():
-            if isinstance(v, (int, float)):     # probably not necessary
-                return int(v)
-            if isinstance(v, dict):
-                return int(v.get('value')) if v.get('value') else 0
+        # Handle switch routes
+        if 'switch' in inputs or 'switch' in class_type:
+            switch_value = inputs.get('switch')
+            if isinstance(switch_value, list):
+                switch_value = _resolve_linked_node(switch_value, nodes, 'switch', visited)
 
-    except Exception:
-        pass
+            if switch_value is True and 'on_true' in inputs:
+                return _resolve_linked_node(inputs['on_true'], nodes, target_param, visited)
+            elif switch_value is False and 'on_false' in inputs:
+                return _resolve_linked_node(inputs['on_false'], nodes, target_param, visited)
 
-    return 0
+        # Handle resolution nodes
+        if target_param in ['width', 'height']:
+            if 'megapixels' in inputs and any(k in inputs for k in ['aspect_ratio', 'ratio']):
+                megapixels = inputs.get('megapixels')
+                if isinstance(megapixels, list):
+                    megapixels = _resolve_linked_node(megapixels, nodes, 'megapixels', visited)
+
+                aspect_ratio = inputs.get('aspect_ratio') or inputs.get('ratio')
+                if isinstance(aspect_ratio, list):
+                    aspect_ratio = _resolve_linked_node(aspect_ratio, nodes, 'aspect_ratio', visited)
+
+                w_r, h_r = parse_aspect_ratio(aspect_ratio)
+                w, h = calculate_resolution(w_r, h_r, float(megapixels))
+                return w if target_param == 'width' else h
+
+        if target_param and target_param in inputs:
+            value = inputs.get(target_param)
+            return _resolve_linked_node(value, nodes, target_param, visited)
+
+        aliases = {
+            'sampler': ['sampler_name', 'sampler'],
+            'steps': ['steps', 'sigmas'],
+            'seed': ['seed', 'noise', 'noise_seed']
+        }
+        for alias in aliases.get(target_param, []):
+            if alias in inputs:
+                value = inputs[alias]
+                return _resolve_linked_node(value, nodes, target_param, visited) if isinstance(value, list) else value
+
+    except Exception as e:
+        print(f"Error resolving {target_param} on node {target_id}: {e}")
+
+    return None
+
+
+def parse_aspect_ratio(aspect_ratio: str) -> tuple[float, float]:
+    match = re.search(r"(\d+(?:\.\d+)?)\s*[:/x]\s*(\d+(?:\.\d+)?)", aspect_ratio)
+    if match:
+        return float(match.group(1)), float(match.group(2))
+    return 0.0, 0.0
+
+def calculate_resolution(ratio_w: float, ratio_h: float, megapixels: float) -> tuple[int, int]:
+    base = 1024 * 1024
+    area = megapixels * base
+    ratio = ratio_w / ratio_h
+    h = math.sqrt(area / ratio)
+    w = h * ratio
+    w = round(w / 8) * 8
+    h = round(h / 8) * 8
+    return int(w), int(h)
 
 def extract_comfy_metadata(nodes: dict) -> dict:
     active_loras = {}  # name: strength
@@ -178,18 +249,21 @@ def extract_comfy_metadata(nodes: dict) -> dict:
     }
 
     if not nodes:
-        return ""
+        return {}
 
     potential_prompts = []
     ksamplers = []
     empty_negative = False
+
+    #print(nodes)
 
     for node_id, data in nodes.items():
         node_type = data['class_type'].lower()
 
         # Look for positive/negative prompt
         if "textencode" in node_type or node_type in ["easy positive", "easy negative"]:
-            extracted = extract_comfy_prompt(data)      # TODO it might be better to extract pos/neg from what's linked to the KSampler
+            extracted = extract_comfy_prompt(data)
+            # TODO it might be better to extract pos/neg from what's linked to the KSampler, maybe a verify_connection() function?
 
             if extracted['positive'] and not result.get('positive'):
                 result['positive'] = extracted['positive']
@@ -216,18 +290,25 @@ def extract_comfy_metadata(nodes: dict) -> dict:
                     if text_val:
                         potential_prompts.append(text_val)
 
-        # Look for KSampler for settings
-        # TODO more robust search that finds the actual used one
-        if "ksampler" in node_type or "videosampler" in node_type:
-            if "steps" in data['inputs']:  # Required for sorting
-                if isinstance(data['inputs']['steps'], list):
-                    data['inputs']['steps'] = _resolve_linked_node(data['inputs']['steps'], nodes)
+        # Look for Sampler for settings
+        if "sampler" in node_type:
+            link = data['inputs'].get('steps') or data['inputs'].get('sigmas')
+            if isinstance(link, list):
+                steps = _resolve_linked_node(link, nodes, 'steps')
+                data['inputs']['steps'] = steps
+            ksamplers.append(data['inputs'])
 
-                ksamplers.append(data['inputs'])
+        # Look for Guidance, which is the CFG replacement for Flux for example
+        if "guid" in node_type:
+            guidance = data['inputs'].get('guidance')
+            if isinstance(guidance, list):
+                guidance = _resolve_linked_node(guidance, nodes, 'guidance')
+            result['cfg'] = guidance
 
         # Look for the model
         model_keywords = ['checkpoint', 'unet', 'gguf', 'model']
-        if node_type not in ['vae', 'image', 'video']:
+        ignore_keywords = ['vae', 'image', 'video', 'lora']
+        if not any(ignore in node_type for ignore in ignore_keywords):
             if "load" in node_type and any(name in node_type for name in model_keywords):
                 # Just using the first viable result for now
                 if not result.get('model'):
@@ -236,17 +317,22 @@ def extract_comfy_metadata(nodes: dict) -> dict:
                         result['model'] = model.split('\\')[-1]
 
         # Look for EmptyLatent to get the resolution
-        # TODO also look for resolution node
         is_empty_latent = "latent" in node_type and "empty" in node_type
         is_resizer = any(kw in node_type for kw in ["imagetovideolatent", "imageresize"])
         if (is_empty_latent or is_resizer) and not result['size']:
             width = data['inputs'].get('width')
+            if isinstance(width, list):
+                width = _resolve_linked_node(width, nodes, target_param='width')
+
             height = data['inputs'].get('height')
+            if isinstance(height, list):
+                height = _resolve_linked_node(height, nodes, target_param='height')
+
             if width and height:
                 result['size'] = f"{width}x{height}"
 
         # Look for Loras
-        # TODO check if node is actually connected
+        # TODO check if node is actually connected, or if inactive due to switch
         if "lora" in node_type:
             lora_name = data.get('inputs', {}).get('lora_name')
             lora_strength = data.get('inputs', {}).get('strength_model')
@@ -280,16 +366,21 @@ def extract_comfy_metadata(nodes: dict) -> dict:
     if ksamplers:
         result['steps'] = ksamplers[0].get('steps')
         result['sampler'] = ksamplers[0].get('sampler') or ksamplers[0].get('sampler_name')
+        if isinstance(result['sampler'], list) and len(result['sampler']) == 2:
+            result['sampler'] = _resolve_linked_node(result['sampler'], nodes, 'sampler')
         result['scheduler'] = ksamplers[0].get('scheduler')
-        result['cfg'] = ksamplers[0].get('cfg')
-        result['seed'] = ksamplers[0].get('seed')
+        if not result['cfg']:
+            result['cfg'] = ksamplers[0].get('cfg')
+        result['seed'] = ksamplers[0].get('seed') or ksamplers[0].get('noise')
+        if isinstance(result['seed'], list):
+            result['seed'] = _resolve_linked_node(result['seed'], nodes, 'seed')
 
     return result
 
 
 def extract_comfy_prompt(node_data: dict) -> dict:
     inputs = node_data.get('inputs', {})
-    extracted: dict[str, str | None] = {'positive': None, 'negative': None, 'text': None}
+    extracted: dict[str, str | list | None] = {'positive': None, 'negative': None, 'text': None}
 
     def get_str(key):  # Helper to ignore lists and safely strip
         val = inputs.get(key)
@@ -404,8 +495,8 @@ def get_formatted_metadata(file_path: str, verbose: bool = False):
         if not prompt:
             prompt = format_comfy_parameters(parameters)        # ComfyUI prompt
 
+        prompt = prompt.strip()
         prompt = re.sub(r",(\w)", r", \1", prompt)  # Add space after commas
-        # TODO remove \n at the start
 
         return prompt, parameters.get('loras', {})
 
@@ -679,6 +770,15 @@ def handle_api_command(folder_path: str, strip_version: bool = False):
 
 
 if __name__ == '__main__':
+    # extract_metadata("C:\\Users\\danie\\Desktop\\Flux2_00005_.png")
+    # print(format_comfy_parameters(extract_metadata("C:\\Users\\danie\\Desktop\\Flux2_00005_.png")))
+
+    # extract_metadata("C:\\Users\\danie\\Desktop\\Flux2_00006_.png")
+    # print(format_comfy_parameters(extract_metadata("C:\\Users\\danie\\Desktop\\Flux2_00006_.png")))
+
+    extract_metadata("C:\\Users\\danie\\Desktop\\ComfyUI_00025_.png")
+    print(format_comfy_parameters(extract_metadata("C:\\Users\\danie\\Desktop\\ComfyUI_00025_.png")))
+
     parser = argparse.ArgumentParser(description="Metadata Extractor")
 
     subparsers = parser.add_subparsers(dest="mode", required=True, help="Choose extraction mode")
