@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 import re
 import os
-import sys
 import json
-import argparse
 import math
-import numpy as np      # TODO remove
+import random
+import argparse
+
+from enum import Enum
+from typing import Optional
+
 import av
 from PIL import Image
 import piexif
 import piexif.helper
-from enum import Enum
-from typing import Optional
 
-
-VALID_FORMATS = ('.png', '.jpg', '.jpeg', '.mp4')
+VALID_FORMATS = ('.png', '.jpg', '.jpeg', '.mp4', '.mkv', '.webm', '.mov', '.avi')
 
 class MetadataOption(Enum):
     ALL = 0
@@ -47,14 +47,24 @@ def load_file(file_path: str, verbose: bool = False) -> dict | None:
                 if verbose:
                     print(f"No metadata found in {file_path}")
                 return None
-        elif file_path.endswith('.mp4'):
+        elif file_path.endswith(('.mp4', '.mkv', '.webm', '.mov', '.avi')):
             try:
                 with av.open(file_path) as container:
                     metadata = container.metadata
-                    comment_str = metadata.get('comment') or metadata.get('COMMENT')       # Only works with Comfy
-                    # TODO is comment not always available in Comfy?
-                    nodes = json.loads(comment_str)
+                    potential_keys = ['comment', 'COMMENT', 'prompt', 'Prompt', 'workflow', 'Workflow', 'description']
+                    comment_str = None
 
+                    for key in potential_keys:
+                        if metadata.get(key):
+                            comment_str = metadata.get(key)
+                            break
+
+                    if not comment_str:
+                        if verbose:
+                            print(f"No metadata tags found in video {file_path}")
+                        return None
+
+                    nodes = json.loads(comment_str)
                     return nodes
 
             except json.JSONDecodeError:
@@ -640,7 +650,7 @@ def get_datalist(
             if not remaining_dirs:
                 break
 
-            idx = np.random.randint(0, len(remaining_dirs))
+            idx = random.randint(0, len(remaining_dirs)-1)
             selected_dir = remaining_dirs.pop(idx)
             dirs_to_process.append(selected_dir)
 
@@ -683,7 +693,7 @@ def get_datalist(
         if not successful_in_dir and amount is not None:
             # Extracting metadata has failed for an image, try to find another directory that hasn't been used yet
             if remaining_dirs:
-                idx = np.random.randint(0, len(remaining_dirs))
+                idx = random.randint(0, len(remaining_dirs)-1)
                 new_dir = remaining_dirs.pop(idx)
                 dirs_to_process.append(new_dir)
                 if verbose:
