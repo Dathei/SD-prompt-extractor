@@ -4,7 +4,8 @@ const path = require('path');
 
 const execPromise = util.promisify(exec);
 
-const pythonScript = path.join(__dirname, "./prompt_extractor.py");
+// const pythonScript = path.join(__dirname, "./prompt_extractor.py");
+const pythonScript = path.join(__dirname, "dist", "prompt_extractor.exe");
 const POLL_INTERVAL = 5000;
 
 // let lastSyncTime = Date.now();
@@ -54,7 +55,8 @@ eagle.onPluginCreate((plugin) => {
 				for (let item of newItems) {
 					const itemInfoFolder = path.dirname(item.metadataFilePath);
 
-					const command = `python "${pythonScript}" api --f "${itemInfoFolder}" --strip_version`;
+					// const command = `python "${pythonScript}" api --file "${itemInfoFolder}" --strip_version`;
+					const command = `"${pythonScript}" api --file "${itemInfoFolder}" --strip_version`;
 
 					try {
 						console.log(`Running Python script for item ${item.id}: ${command}`);
