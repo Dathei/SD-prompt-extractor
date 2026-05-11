@@ -217,6 +217,51 @@ def _resolve_linked_node(link: list, nodes: dict, target_param: str = None, visi
     return None
 
 
+def get_active_graph(nodes: dict) -> dict:
+    active_ids = set()
+
+    # Nodes that are referenced by other nodes
+    referenced = set()
+    for node_id, data in nodes.items():
+        for v in data.get('inputs', {}).values():
+            if isinstance(v, list):
+                referenced.add(str(v[0]))
+
+    # Nodes that weren't referenced e.g., SaveImage, PreviewImage
+    sinks = [n_id for n_id in nodes if n_id not in referenced]
+
+    # Helper to trace nodes backwards from sinks
+    def trace(nid: str):
+        if nid in active_ids:
+            return
+        active_ids.add(nid)
+
+        node = nodes.get(nid)
+        if not node:
+            return
+
+        inputs = node.get('inputs', {})
+        if 'switch' in inputs and ('on_true' in inputs or 'on_false' in inputs):
+            switch_link = inputs['switch']
+            if isinstance(switch_link, list):
+                trace(str(switch_link[0]))
+
+            switch_val = _resolve_linked_node(switch_link, nodes, target_param='switch')
+            active_path = 'on_true' if switch_val else 'on_false'
+            if active_path in inputs and isinstance(inputs[active_path], list):
+                trace(str(inputs[active_path][0]))
+        else:
+            # Normal nodes
+            for key, val in inputs.items():
+                if isinstance(val, list) and len(val) >= 1:
+                    trace(str(val[0]))
+
+    for sink in sinks:
+        trace(str(sink))
+
+    return {k: v for k, v in nodes.items() if k in active_ids}
+
+
 def parse_aspect_ratio(aspect_ratio: str) -> tuple[float, float]:
     match = re.search(r"(\d+(?:\.\d+)?)\s*[:/x]\s*(\d+(?:\.\d+)?)", aspect_ratio)
     if match:
@@ -234,6 +279,11 @@ def calculate_resolution(ratio_w: float, ratio_h: float, megapixels: float) -> t
     return int(w), int(h)
 
 def extract_comfy_metadata(nodes: dict) -> dict:
+    if not nodes:
+        return {}
+
+    nodes = get_active_graph(nodes)
+
     active_loras = {}  # name: strength
     result = {
         'positive': "",
@@ -247,9 +297,6 @@ def extract_comfy_metadata(nodes: dict) -> dict:
         'model': "",
         'loras': active_loras
     }
-
-    if not nodes:
-        return {}
 
     potential_prompts = []
     ksamplers = []
@@ -770,15 +817,6 @@ def handle_api_command(folder_path: str, strip_version: bool = False):
 
 
 if __name__ == '__main__':
-    # extract_metadata("C:\\Users\\danie\\Desktop\\Flux2_00005_.png")
-    # print(format_comfy_parameters(extract_metadata("C:\\Users\\danie\\Desktop\\Flux2_00005_.png")))
-
-    # extract_metadata("C:\\Users\\danie\\Desktop\\Flux2_00006_.png")
-    # print(format_comfy_parameters(extract_metadata("C:\\Users\\danie\\Desktop\\Flux2_00006_.png")))
-
-    extract_metadata("C:\\Users\\danie\\Desktop\\ComfyUI_00025_.png")
-    print(format_comfy_parameters(extract_metadata("C:\\Users\\danie\\Desktop\\ComfyUI_00025_.png")))
-
     parser = argparse.ArgumentParser(description="Metadata Extractor")
 
     subparsers = parser.add_subparsers(dest="mode", required=True, help="Choose extraction mode")
