@@ -201,11 +201,34 @@ def _resolve_linked_node(link: list, nodes: dict, target_param: str = None, visi
             value = inputs.get(target_param)
             return _resolve_linked_node(value, nodes, target_param, visited)
 
+        # Special case when CreateCFGScheduleFloatList is used
+        if target_param == 'cfg':
+            start = inputs.get('cfg_scale_start')
+            end = inputs.get('cfg_scale_end')
+            if start is not None and end is not None:
+                if isinstance(start, list):
+                    start = _resolve_linked_node(start, nodes, target_param, visited)
+                if isinstance(end, list):
+                    end = _resolve_linked_node(end, nodes, target_param, visited)
+
+                try:
+                    start = float(start)
+                    end = float(end)
+
+                    if start == end:
+                        return start
+                    return f"{start} -> {end}"  # probably incompatible with A1111
+
+                except (ValueError, TypeError):
+                    return start
+
         aliases = {
             'sampler': ['sampler_name', 'sampler'],
             'steps': ['steps', 'sigmas'],
-            'seed': ['seed', 'noise', 'noise_seed']
+            'seed': ['seed', 'noise', 'noise_seed'],
+            'cfg': ['cfg', 'guider', 'guidance'],
         }
+
         for alias in aliases.get(target_param, []):
             if alias in inputs:
                 value = inputs[alias]
@@ -416,6 +439,8 @@ def extract_comfy_metadata(nodes: dict) -> dict:
         result['scheduler'] = ksamplers[0].get('scheduler')
         if not result['cfg']:
             result['cfg'] = ksamplers[0].get('cfg')
+            if isinstance(result['cfg'], list) and len(result['cfg']) == 2:
+                result['cfg'] = _resolve_linked_node(result['cfg'], nodes, 'cfg')
         result['seed'] = ksamplers[0].get('seed') or ksamplers[0].get('noise')
         if isinstance(result['seed'], list):
             result['seed'] = _resolve_linked_node(result['seed'], nodes, 'seed')
