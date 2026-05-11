@@ -17,16 +17,18 @@ import piexif.helper
 VALID_FORMATS = ('.png', '.jpg', '.jpeg', '.mp4', '.mkv', '.webm', '.mov', '.avi')
 
 class MetadataOption(Enum):
-    ALL = 0
-    PROMPT = 1
-    POSITIVE_PROMPT = 2
-    NEGATIVE_PROMPT = 3
-    SETTINGS = 4
-    STEPS = 5
-    SAMPLER = 6
-    SCHEDULER = 7
-    CFG = 8
-    SIZE = 9
+    ALL = "all"
+    PROMPT = "prompt"
+    PARAMETERS = "parameters"
+    POSITIVE_PROMPT = "positive"
+    NEGATIVE_PROMPT = "negative"
+    STEPS = "steps"
+    SAMPLER = "sampler"
+    SCHEDULER = "scheduler"
+    CFG = "cfg"
+    SEED = "seed"
+    SIZE = "size"
+    MODEL = "model"
 
 def load_file(file_path: str, verbose: bool = False) -> dict | None:
     try:
@@ -592,7 +594,6 @@ def add_loras_as_tags(lora_dict: dict, strip_version: bool = False) -> list:
 
 def get_formatted_metadata(file_path: str, verbose: bool = False):
     try:
-        # TODO currently doesnt support option.value
         parameters = extract_metadata(file_path)
 
         if parameters is None:
@@ -613,13 +614,50 @@ def get_formatted_metadata(file_path: str, verbose: bool = False):
         return None, None
 
 
+def get_specific_metadata(metadata: dict, option: MetadataOption):
+    if option.value in metadata:
+        return str(metadata.get(option.value, '')).strip()
+
+    if option == MetadataOption.ALL:
+        prompt = metadata.get('full_prompt')
+        if not prompt:
+            prompt = format_comfy_parameters(metadata)
+        return prompt.strip()
+
+    if option == MetadataOption.PROMPT:
+        parts = []
+        pos = metadata.get('positive')
+        if pos:
+            parts.append(str(pos).strip())
+        neg = metadata.get('negative')
+        if neg:
+            parts.append(f"Negative prompt: {str(neg).strip()}")
+        return "\n".join(parts)
+
+    if option == MetadataOption.PARAMETERS:
+        params = []
+        keys_to_check = [
+            ('steps', 'Steps'), ('sampler', 'Sampler'), ('scheduler', 'Scheduler'),
+            ('cfg', 'CFG scale'), ('seed', 'Seed'), ('size', 'Size'), ('model', 'Model')
+        ]
+        for dict_key, label in keys_to_check:
+            val = metadata.get(dict_key)
+            if val:
+                if dict_key in ['sampler', 'scheduler']:
+                    val = str(val).split("/")[-1].capitalize()
+                params.append(f"{label}: {val}")
+
+        return ", ".join(params)
+
+    return ""
+
 def get_datalist(
         root_dir: str,
         option: MetadataOption = MetadataOption.POSITIVE_PROMPT,
         process: bool = True,
         amount: Optional[int] = None,
         verbose: bool = False
-) -> list:     # TODO outdated
+) -> list:
     """
     Selects a random sample of images and extracts their metadata.
 
@@ -650,55 +688,59 @@ def get_datalist(
         for _ in range(sample_size):
             if not remaining_dirs:
                 break
-
             idx = random.randint(0, len(remaining_dirs)-1)
             selected_dir = remaining_dirs.pop(idx)
             dirs_to_process.append(selected_dir)
 
+    has_text = option in [MetadataOption.ALL, MetadataOption.PROMPT,
+                               MetadataOption.POSITIVE_PROMPT, MetadataOption.NEGATIVE_PROMPT]
+
     i = 0
     while i < len(dirs_to_process):
-        dir = dirs_to_process[i]
+        dir_path = dirs_to_process[i]
         successful_in_dir = False
-        for file in os.listdir(dir):
+
+        for file in os.listdir(dir_path):
             try:
                 if verbose:
-                    print(f"[{i + 1}/{len(dirs_to_process)}] Processing {dir}")
+                    print(f"[{i + 1}/{len(dirs_to_process)}] Processing {os.path.join(dir_path, file)}")
 
                 if not file.endswith(VALID_FORMATS) or file.endswith('_thumbnail.png'):
                     continue
 
-                metadata_result = load_file(os.path.join(dir, file), verbose=verbose)
-
-                metadata = metadata_result[option.value]
-                if not metadata:  # Skip empty metadata
+                metadata_result = extract_metadata(os.path.join(dir_path, file), verbose=verbose)
+                if not metadata_result:
                     continue
 
-            except TypeError:
-                continue
+                extracted_str = get_specific_metadata(metadata_result, option)
+                if not extracted_str:
+                    continue
 
-            if (
-                    option.value == 0 or option.value == 1 or option.value == 2) and process:  # process_string only for positive or negative prompt
-                processed_metadata = process_string(metadata)
-                if processed_metadata:  # Only add non-empty strings
-                    if data and processed_metadata == data[-1]:
-                        continue  # Skip duplicates
-                    data.append(processed_metadata)
-                    successful_in_dir = True
-            else:
-                data.append(metadata)
+                if has_text and process:
+                    extracted_str = process_string(extracted_str)
+
+                if not extracted_str or (data and extracted_str == data[-1]):
+                    continue  # Skip empty or duplicate strings
+
+                data.append(extracted_str)
                 successful_in_dir = True
 
-            if amount is not None and len(data) >= amount:
-                return data
+                if amount is not None and len(data) >= amount:
+                    return data
 
-        if not successful_in_dir and amount is not None:
-            # Extracting metadata has failed for an image, try to find another directory that hasn't been used yet
-            if remaining_dirs:
-                idx = random.randint(0, len(remaining_dirs)-1)
-                new_dir = remaining_dirs.pop(idx)
-                dirs_to_process.append(new_dir)
+
+            except Exception as e:
                 if verbose:
-                    print(f"Added new directory {new_dir} to compensate for unsuccessful processing")
+                    print(f"Error extracting {file}: {e}")
+                continue
+
+        if not successful_in_dir and amount is not None and remaining_dirs:
+            # Extracting metadata has failed for an image, try to find another directory that hasn't been used yet
+            idx = random.randint(0, len(remaining_dirs)-1)
+            new_dir = remaining_dirs.pop(idx)
+            dirs_to_process.append(new_dir)
+            if verbose:
+                print(f"Added new directory {new_dir} to compensate for unsuccessful processing")
         i += 1
 
     return data
@@ -711,7 +753,7 @@ def write_to_file(
         process: Optional[bool] = True,
         amount: Optional[int] = None,
         verbose: Optional[bool] = False
-) -> None:  # TODO add random as option
+) -> None:  # maybe add random as option instead of default?
     """
     Extract metadata and write to a textfile
 
@@ -749,9 +791,7 @@ def add_metadata_to_json(
         amount: Amount of images to process, None for all
         offset: Number of images to skip before starting to add metadata
         overwrite: Overwrite existing annotations
-        option: Metadata option to extract
-            0 - all, 1 - positive prompt, 2 - negative prompt,
-            3 - steps, 4 - sampler, 5 - cfg, 6 - size
+        option: Specific metadata option to extract
         verbose: Whether to print verbose information
         add_lora_tags: Whether to add LoRA tags to the JSON
         strip_version: Whether to strip version information from LoRA tags
