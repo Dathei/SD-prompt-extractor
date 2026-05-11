@@ -310,7 +310,6 @@ def extract_comfy_metadata(nodes: dict) -> dict:
         # Look for positive/negative prompt
         if "textencode" in node_type or node_type in ["easy positive", "easy negative"]:
             extracted = extract_comfy_prompt(data)
-            # TODO it might be better to extract pos/neg from what's linked to the KSampler, maybe a verify_connection() function?
 
             if extracted['positive'] and not result.get('positive'):
                 result['positive'] = extracted['positive']
@@ -379,7 +378,6 @@ def extract_comfy_metadata(nodes: dict) -> dict:
                 result['size'] = f"{width}x{height}"
 
         # Look for Loras
-        # TODO check if node is actually connected, or if inactive due to switch
         if "lora" in node_type:
             lora_name = data.get('inputs', {}).get('lora_name')
             lora_strength = data.get('inputs', {}).get('strength_model')
@@ -482,27 +480,53 @@ def extract_comfy_prompt(node_data: dict) -> dict:
 
 
 def format_comfy_parameters(parameters: dict) -> str:
-    positive = parameters.get('positive', '')
-    negative = parameters.get('negative', '')
-    steps = parameters.get('steps', '')
-    sampler = parameters.get('sampler', '')
-    scheduler = parameters.get('scheduler', '')
-    cfg = parameters.get('cfg', '')
-    seed = parameters.get('seed', '')
-    size = parameters.get('size', '')
-    model_name = parameters.get('model', '')
+    parts = []
+
+    positive = parameters.get('positive')
+    if positive:
+        parts.append(str(positive).strip())
+
     loras = parameters.get('loras', {})
-    loras_str = "Loras:\n"
     if loras:
+        lora_lines = ["Loras:"]
         for name, strength in loras.items():
-            loras_str += f"{name}: {strength:.2f}\n"
+            try:
+                lora_lines.append(f"{name}: {float(strength):.2f}")
+            except (ValueError, TypeError):     # in case casting to float fails, which is needed for .2f
+                lora_lines.append(f"{name}: {strength}")
+        parts.append("\n".join(lora_lines))
 
-    parameters_str = f"""{positive}\n
-{loras_str if loras else ''}
-Negative prompt: {negative}\n
-Steps: {steps}, Sampler: {sampler}, Scheduler: {scheduler}, CFG scale: {cfg}, Seed: {seed}, Size: {size}, Model: {model_name}"""
+    negative = parameters.get('negative')
+    if negative:
+        parts.append(f"Negative prompt: {str(negative).strip()}")
 
-    return parameters_str
+    params = []
+
+    if parameters.get('steps'):
+        params.append(f"Steps: {parameters['steps']}")
+
+    if parameters.get('sampler'):
+        params.append(f"Sampler: {str(parameters['sampler']).capitalize()}")
+
+    if parameters.get('scheduler'):
+        params.append(f"Scheduler: {str(parameters['scheduler']).capitalize()}")
+
+    if parameters.get('cfg'):
+        params.append(f"CFG scale: {parameters['cfg']}")
+
+    if parameters.get('seed'):
+        params.append(f"Seed: {parameters['seed']}")
+
+    if parameters.get('size'):
+        params.append(f"Size: {parameters['size']}")
+
+    if parameters.get('model'):
+        params.append(f"Model: {str(parameters['model']).strip()}")
+
+    if params:
+        parts.append(", ".join(params))
+
+    return "\n\n".join(parts)
 
 
 def process_string(s: str) -> str:
