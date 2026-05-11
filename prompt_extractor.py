@@ -531,7 +531,7 @@ def format_comfy_parameters(parameters: dict) -> str:
         params.append(f"Steps: {parameters['steps']}")
 
     if parameters.get('sampler'):
-        params.append(f"Sampler: {str(parameters['sampler']).capitalize()}")
+        params.append(f"Sampler: {str(parameters['sampler']).split("/")[-1].capitalize()}")
 
     if parameters.get('scheduler'):
         params.append(f"Scheduler: {str(parameters['scheduler']).capitalize()}")
