@@ -36,7 +36,7 @@ def load_file(file_path: str, verbose: bool = False) -> dict | None:
                     metadata = img.info
                 else:
                     if verbose:
-                        print(f"No info attribute found in {file_path}")
+                        print(f"No info attribute found in png {file_path}")
                     return None
 
         elif file_path.endswith('.jpg') or file_path.endswith('.jpeg'):
@@ -45,8 +45,9 @@ def load_file(file_path: str, verbose: bool = False) -> dict | None:
                 metadata = piexif.helper.UserComment.load(img["Exif"][piexif.ExifIFD.UserComment])
             except KeyError:  # no exif data
                 if verbose:
-                    print(f"No metadata found in {file_path}")
+                    print(f"No metadata found in jpg {file_path}")
                 return None
+
         elif file_path.endswith(('.mp4', '.mkv', '.webm', '.mov', '.avi')):
             try:
                 with av.open(file_path) as container:
