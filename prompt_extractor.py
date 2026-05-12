@@ -10,9 +10,10 @@ from enum import Enum
 from typing import Optional
 
 import av
-from PIL import Image
 import piexif
 import piexif.helper
+from PIL import Image
+
 
 VALID_FORMATS = ('.png', '.jpg', '.jpeg', '.mp4', '.mkv', '.webm', '.mov', '.avi')
 
@@ -344,7 +345,7 @@ def extract_comfy_metadata(nodes: dict) -> dict:
         node_type = data['class_type'].lower()
 
         # Look for positive/negative prompt
-        if "textencode" in node_type or node_type in ["easy positive", "easy negative"]:
+        if "textencode" in node_type or node_type in ["easy positive", "easy negative", "wildcard processor"]:
             extracted = extract_comfy_prompt(data)
 
             if extracted['positive'] and not result.get('positive'):
