@@ -40,7 +40,7 @@ eagle.onPluginCreate((plugin) => {
 				let prevModified = knownItems.get(file.id);
 				let currModified = file.modifiedAt || 0;
 
-				if (prevModified === undefined || currModified > prevModified) {		// new || modified, maybe only check for new?
+				if (prevModified === undefined) {
 					modifiedIds.push(file.id);
 					knownItems.set(file.id, currModified);
 				}
