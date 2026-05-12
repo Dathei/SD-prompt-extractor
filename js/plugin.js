@@ -13,7 +13,71 @@ let isInitialized = false;
 let isProcessing = false;
 let knownItems = new Map();
 
+
+async function extractMetadata(items, overwrite = false) {
+	for (let item of items) {
+		if (!overwrite && item.annotation) continue;
+
+		const itemInfoFolder = path.dirname(item.metadataFilePath);
+
+		// const command = `python "${pythonScript}" api --file "${itemInfoFolder}" --strip_version`;
+		const command = `"${pythonScript}" api --file "${itemInfoFolder}" --strip_version`;
+
+		try {
+			// console.log(`Running Python script for item ${item.id}: ${command}`);
+
+			const { stdout, stderr } = await execPromise(command);
+			if (stdout) {
+				console.log(`Successfully extracted for ${item.id}: ${stdout}`);
+				try {
+					let data = JSON.parse(stdout);
+					console.log('Parsed Data:', typeof data);
+					let annotation = data.annotation || "";
+					let tags = data.tags || [];
+
+					if (!item.annotation && annotation !== "") item.annotation = annotation;
+					if (tags.length > 0) {
+						let currentTags = item.tags || [];
+						// Prevents duplicates and deletion of custom tags
+						item.tags = [...new Set([...currentTags, ...tags])];
+					}
+
+					console.log(item.tags, tags)
+					await item.save();
+
+					console.log(`annotation: ${annotation}, tags: ${tags}`);
+				} catch (error) {
+					console.error(`Python script failed for {item.id}:`, error)
+				}
+			}
+		} catch (error) {
+			console.error(`Python script failed for item ${item.id}:`, error);
+		}
+		await new Promise(resolve => setTimeout(resolve, 500));
+	}
+}
+
 eagle.onPluginCreate((plugin) => {
+	const logWindow = document.getElementById('logWindow');
+	const progressBar = document.getElementById('progressBar');
+	const extractBtn = document.getElementById('extractBtn');
+
+	const chkOverwrite = document.getElementById('chkOverwrite');
+	const chkLoras = document.getElementById('chkLoras');
+	const chkStripVersion = document.getElementById('chkStripVersion');
+
+	function writeLog(message) {
+		console.log(message);
+		logWindow.textContent += `\n${message}`;
+		logWindow.scrollTop = logWindow.scrollHeight;
+	}
+
+	if (chkLoras && chkStripVersion) {
+		chkLoras.addEventListener('change', (e) => {
+			chkStripVersion.disabled = !e.target.checked;
+		});
+	}
+
 	setInterval(async () => {
 		if (isProcessing) return;
 		isProcessing = true;
@@ -50,48 +114,8 @@ eagle.onPluginCreate((plugin) => {
 				console.log(`Found ${modifiedIds.length} new/modified items`, modifiedIds);
 
 				let fullItems = await eagle.item.getByIds(modifiedIds);
-				let newItems = fullItems.filter(item => !item.annotation);	// Only process files with no annotation
 
-				for (let item of newItems) {
-					const itemInfoFolder = path.dirname(item.metadataFilePath);
-
-					// const command = `python "${pythonScript}" api --file "${itemInfoFolder}" --strip_version`;
-					const command = `"${pythonScript}" api --file "${itemInfoFolder}" --strip_version`;
-
-					try {
-						console.log(`Running Python script for item ${item.id}: ${command}`);
-
-						const { stdout, stderr } = await execPromise(command);
-						if (stdout) {
-							console.log(`Successfully extracted for ${item.id}: ${stdout}`);
-							try {
-								let data = JSON.parse(stdout);
-								console.log('Parsed Data:', typeof data);
-								let annotation = data.annotation || "";
-								let tags = data.tags || [];
-
-								if (!item.annotation && annotation !== "") item.annotation = annotation;
-								if (tags.length > 0) {
-									let currentTags = item.tags || [];
-									// Prevents duplicates and deletion of custom tags
-									item.tags = [...new Set([...currentTags, ...tags])];
-								}
-
-								console.log(item.tags, tags)
-								await item.save();
-
-								console.log(`annotation: ${annotation}, tags: ${tags}`);
-							} catch (error) {
-								console.error(`Python script failed for {item.id}:`, error)
-							}
-						}
-					} catch (error) {
-						console.error(`Python script failed for item ${item.id}:`, error);
-					}
-					await new Promise(resolve => setTimeout(resolve, 500));
-				}
-			} else {
-				console.log("No files modified")
+				await extractMetadata(fullItems);
 			}
 		} catch (error) {
 			console.error("Polling error: ", error)
@@ -99,4 +123,20 @@ eagle.onPluginCreate((plugin) => {
 			isProcessing = false;
 		}
 	}, POLL_INTERVAL);
+
+	setInterval(async () => {
+		const statusDiv = document.getElementById('selected')
+		if (statusDiv) {
+			let selected = await eagle.item.getSelected();
+			if (selected.length > 0) {
+				statusDiv.innerText = `Number of selected files: ${selected.length}`
+				extractBtn.disabled = false;
+			} else {
+				statusDiv.innerText = `You have not selected any files.`
+				extractBtn.disabled = true;
+			}
+
+		}
+	}, 1000);
 });
+
