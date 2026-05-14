@@ -583,7 +583,7 @@ def process_string(s: str) -> str:
 
 def add_loras_as_tags(lora_dict: dict, strip_version: bool = False) -> list:
     tags = []
-    version_pattern = r"(?:[_-][Vv]?|[Vv])?\d+(?:-\d+)?$"
+    version_pattern = r"(?:[_-][Vv]?|[Vv])?\d+(?:-\d+)?$"       # TODO update pattern
 
     for lora_name in lora_dict.keys():
         if strip_version:
@@ -889,32 +889,28 @@ def add_metadata_to_json(
                 return
 
 
-def handle_api_command(folder_path: str, strip_version: bool = False):
-    file_to_process = folder_path
+def handle_api_command(bulk_path: str = None, strip_version: bool = False):
+    if bulk_path and os.path.exists(bulk_path):
+        with open(bulk_path, 'r', encoding='utf-8') as f:
+            items_to_process = json.load(f)  # Expected format: {"id": "folder_path"}
 
-    if os.path.isdir(folder_path):
-        found_file = None
+        results = {}
+        for item_id, folder_path in items_to_process.items():
+            file_to_process = folder_path
 
-        for file in os.listdir(folder_path):
-            if file.endswith(VALID_FORMATS) and not file.endswith('_thumbnail.png'):
-                found_file = os.path.join(folder_path, file)
-                break
+            if os.path.isdir(folder_path):
+                for file in os.listdir(folder_path):
+                    if file.endswith(VALID_FORMATS) and not file.endswith('_thumbnail.png'):
+                        file_to_process = os.path.join(folder_path, file)
+                        break
 
-        if not found_file:
-            print(json.dumps({"error": "No media file found in folder"}))
-            return
+            prompt, loras = get_formatted_metadata(file_path=file_to_process, verbose=False)
+            results[item_id] = {
+                "annotation": prompt,
+                "tags": add_loras_as_tags(loras, strip_version=strip_version) if loras else []
+            }
 
-        file_to_process = found_file
-
-    prompt, loras = get_formatted_metadata(
-        file_path=file_to_process,
-        verbose=False,
-    )
-    output = {
-        "annotation": prompt,
-        "tags": add_loras_as_tags(loras, strip_version=strip_version) if loras else []
-    }
-    print(json.dumps(output))
+        print(json.dumps(results))
 
 
 if __name__ == '__main__':
@@ -932,7 +928,7 @@ if __name__ == '__main__':
     eagle_parser.add_argument("--strip_version", action="store_true", help="Strip version info from LoRA tags")
 
     api_parser = subparsers.add_parser("api", aliases=['a'], help="API mode: Extract metadata from a single file")
-    api_parser.add_argument("--file", "-f", type=str, required=True, help="Path to file")
+    api_parser.add_argument("--bulk", "-b", type=str, help="Path to a JSON file containing items to process")
     api_parser.add_argument("--strip_version", action="store_true", help="Strip version info from LoRA tags")
 
     file_parser = subparsers.add_parser("file", aliases=['f'], help="Write to Text File")
@@ -967,6 +963,6 @@ if __name__ == '__main__':
         )
     elif args.mode in ['api', 'a']:
         handle_api_command(
-            folder_path=args.file,
+            bulk_path=args.bulk,
             strip_version=args.strip_version,
         )
