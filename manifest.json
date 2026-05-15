@@ -1,11 +1,11 @@
 {
     "id": "f56431e6-1154-4466-af1f-65c3e26bf515",
     "version": "1.0.0",
-    "platform": "all",
+    "platform": "win",
     "arch": "all",
-    "name": "Stable Diffusion Metadata Extractor",
+    "name": "Stable Diffusion Prompt Extractor",
     "logo": "/logo.png",
-    "keywords": ["ComfyUI", "A1111"],
+    "keywords": ["Stable Diffusion", "ComfyUI", "A1111", "AI"],
     "devTools": false,
     "main": {
         "serviceMode": true,
