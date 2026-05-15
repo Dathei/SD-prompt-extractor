@@ -77,7 +77,14 @@ async function extractMetadata(items, overwrite = false, addLoraTags = true, str
 
 					if (tags.length > 0 && addLoraTags) {
 						let currentTags = item.tags || [];
-						item.tags = [...new Set([...currentTags, ...tags])];
+						if (overwrite) {
+							// Only remove existing tags that start with "lora:"
+							let preservedTags = currentTags.filter(t => !t.toLowerCase().startsWith("lora:"));
+							item.tags = [...new Set([...preservedTags, ...tags])];
+						} else {
+							item.tags = [...new Set([...currentTags, ...tags])];
+						}
+
 						modified = true;
 					}
 

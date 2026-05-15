@@ -583,11 +583,15 @@ def process_string(s: str) -> str:
 
 def add_loras_as_tags(lora_dict: dict, strip_version: bool = False) -> list:
     tags = []
-    version_pattern = r"(?:[_-][Vv]?|[Vv])?\d+(?:-\d+)?$"       # TODO update pattern
+    version_pattern = r"(?:[_-]|(?<=[a-zA-Z]))(?:[vV]\d+(?:[.-]\d+)?|0+\d+)(?=[_-]|$)|[_-]\d+(?:[.-]\d+)?$"
 
     for lora_name in lora_dict.keys():
         if strip_version:
             lora_name = re.sub(version_pattern, "", lora_name)
+            # Cleanup double underscores/dashes left behind in the middle
+            lora_name = re.sub(r"_{2,}|-{2,}", "_", lora_name)
+            # Cleanup any dangling underscores/dashes at the very end
+            lora_name = lora_name.strip("_-")
         tags.append(f"lora: {lora_name}")
 
     return tags

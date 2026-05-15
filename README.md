@@ -9,7 +9,8 @@ Built primarily as an **Eagle Plugin** to automatically add prompt information t
 This provides a quick preview of which prompts and settings worked and which didn't.
 It supports **ComfyUI** and **A1111 WebUI** (and its forks like Forge, and Neo).
 
-This tool extracts the exact generation parameters from any modern local model.
+Runs silently in the background, instantly extracting full generation metadata from all modern local models whenever
+you add new files to Eagle.
 
 ---
 
@@ -22,7 +23,7 @@ This tool extracts the exact generation parameters from any modern local model.
 * **Background Auto-Tagging:** Automatically detects newly imported images/videos in Eagle and applies the generation
 prompt to the "Annotation" field.
 * **LoRA Tagging:** Optionally extract LoRAs used in the generation and add them as Eagle Tags.
-* **Version Stripping:** Clean up your tag list by automatically stripping version numbers from LoRAs
+* **Version Stripping:** Clean up your tag list by automatically stripping version numbers and epoch information from LoRAs
 (e.g., `My_Lora_v2` and `My_Lora_v3` both become `lora: My_Lora`).
 * **Manual Control UI:** Select any number of files inside Eagle and manually run the extractor.
 
