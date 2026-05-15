@@ -15,9 +15,9 @@ This tool extracts the exact generation parameters from any modern local model.
 
 ## Features
 
-### Eagle Plugin (Auto-Tagger & UI)
-
 <img align="right" width="280" src="assets/eagle_annotation_example.png" alt="Eagle annotation example">
+
+### Eagle Plugin (Auto-Tagger & UI)
 
 * **Background Auto-Tagging:** Automatically detects newly imported images/videos in Eagle and applies the generation
 prompt to the "Annotation" field.
