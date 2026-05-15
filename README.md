@@ -1,4 +1,8 @@
 # Stable Diffusion Prompt Extractor for Eagle
+<p align="center">
+  <img src="assets/logo.png" width="128" alt="Stable Diffusion Prompt Extractor logo">
+</p>
+
 A fast, robust metadata and prompt extractor for AI-generated images and videos.
 
 Built primarily as an **Eagle Plugin** to automatically add prompt information to the annotation window.
@@ -8,6 +12,7 @@ It supports **ComfyUI** and **A1111 WebUI** (and its forks like Forge, and Neo).
 This tool extracts the exact generation parameters from any modern local model.
 
 ---
+<img align="right" width="256" src="assets/eagle_annotation_example.png" alt="Eagle annotation example">
 
 ## Features
 

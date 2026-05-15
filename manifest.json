@@ -4,7 +4,7 @@
     "platform": "win",
     "arch": "all",
     "name": "Stable Diffusion Prompt Extractor",
-    "logo": "/logo.png",
+    "logo": "/assets/logo.png",
     "keywords": ["Stable Diffusion", "ComfyUI", "A1111", "AI"],
     "devTools": false,
     "main": {
