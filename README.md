@@ -25,7 +25,9 @@ prompt to the "Annotation" field.
 * **LoRA Tagging:** Optionally extract LoRAs used in the generation and add them as Eagle Tags.
 * **Version Stripping:** Clean up your tag list by automatically stripping version numbers and epoch information from LoRAs
 (e.g., `My_Lora_v2` and `My_Lora_v3` both become `lora: My_Lora`).
-* **Manual Control UI:** Select any number of files inside Eagle and manually run the extractor.
+* **Manual Control UI:** Select any number of files inside Eagle and manually run the extractor. 
+  * You can access the interface via the Eagle Plugin menu (Puzzle icon at the top > Service) or by simply pressing the P shortcut
+  and then clicking on this plugin.
 
 ### Command Line Interface (CLI)
 * **Standalone Usage:** You can use the CLI script to parse directories or single files.
