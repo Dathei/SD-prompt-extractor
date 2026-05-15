@@ -12,11 +12,13 @@ It supports **ComfyUI** and **A1111 WebUI** (and its forks like Forge, and Neo).
 This tool extracts the exact generation parameters from any modern local model.
 
 ---
-<img align="right" width="256" src="assets/eagle_annotation_example.png" alt="Eagle annotation example">
 
 ## Features
 
 ### Eagle Plugin (Auto-Tagger & UI)
+
+<img align="right" width="280" src="assets/eagle_annotation_example.png" alt="Eagle annotation example">
+
 * **Background Auto-Tagging:** Automatically detects newly imported images/videos in Eagle and applies the generation
 prompt to the "Annotation" field.
 * **LoRA Tagging:** Optionally extract LoRAs used in the generation and add them as Eagle Tags.
