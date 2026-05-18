@@ -35,7 +35,7 @@ function formatParameters(parameters) {
     if (parameters.steps) params.push(`Steps: ${parameters.steps}`);
     if (parameters.sampler) params.push(`Sampler: ${capitalize(String(parameters.sampler).split(/[\\/]/).pop())}`);
     if (parameters.scheduler) params.push(`Scheduler: ${capitalize(String(parameters.scheduler))}`);
-    if (parameters.cfg) params.push(`CFG scale: ${parameters.cfg}`);
+    if (parameters.cfg) params.push(`CFG scale: ${parameters.cfg.toFixed(2)}`);
     if (parameters.seed) params.push(`Seed: ${parameters.seed}`);
     if (parameters.size) params.push(`Size: ${parameters.size}`);
     if (parameters.model) params.push(`Model: ${String(parameters.model).trim()}`);

@@ -38,7 +38,7 @@ Perfect for feeding your favorite styles into an LLM to generate new, unique pro
 ### Supported Platforms & Formats
 * **Generators:** ComfyUI, Automatic1111 (including Forks), CivitAI
 * **Image Formats:** `.png`, `.jpg`, `.jpeg` 
-* **Video Formats:** `.mp4`, `.mkv`, `.webm`, `.mov`, `.avi`
+* **Video Formats:** `.mp4`, `.mkv`, `.webm`, `.mov`
 
 ---
 

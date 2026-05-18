@@ -1,7 +1,7 @@
 {
     "id": "f56431e6-1154-4466-af1f-65c3e26bf515",
     "version": "1.0.0",
-    "platform": "win",
+    "platform": "all",
     "arch": "all",
     "name": "Stable Diffusion Prompt Extractor",
     "logo": "/assets/logo.png",
