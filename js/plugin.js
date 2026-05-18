@@ -1,12 +1,8 @@
-const { exec } = require('child_process');
-const util = require('util');
 const path = require('path');
-const fs = require('fs');
 
-const execPromise = util.promisify(exec);
+const fileReader = require(path.join(__dirname, 'js', 'file_reader'));
+const metadataParser = require(path.join(__dirname, 'js', 'metadata_parser'));
 
-// const pythonScript = path.join(__dirname, "./prompt_extractor.py");
-const pythonScript = path.join(__dirname, "dist", "prompt_extractor.exe");
 const POLL_INTERVAL = 1000;
 
 // let lastSyncTime = Date.now();
@@ -18,6 +14,7 @@ let knownItems = new Map();
 
 function writeLog(message) {
 	const logWindow = document.getElementById('logWindow');
+	if (!logWindow) return;
 	console.log(message);
 	logWindow.textContent += `${message}\n`;
 	logWindow.scrollTop = logWindow.scrollHeight;
@@ -32,85 +29,59 @@ async function extractMetadata(items, overwrite = false, addLoraTags = true, str
 		progressBar.value = 0;
 	}
 
-	let itemsToProcess = {};
-	for (let item of items) {
+	for (let i = 0; i < items.length; i++) {
+		let item = items[i];
+
 		if (!overwrite && item.annotation) continue;
-		itemsToProcess[item.id] = path.dirname(item.metadataFilePath);
-	}
 
-	const processCount = Object.keys(itemsToProcess).length;
-	if (processCount === 0) {
-		writeLog("All items already have annotations.");
-		if (isManual && progressBar) progressBar.style.display = 'none';
-		return;
-	}
+		try {
+			const filePath = item.filePath;
+			const rawMetadata = await fileReader.loadFile(filePath);
 
-	const tempJsonPath = path.join(__dirname, "temp_bulk_process.json");
-	fs.writeFileSync(tempJsonPath, JSON.stringify(itemsToProcess), 'utf8');
+			if (!rawMetadata) {
+				writeLog(`No metadata found for: ${item.name}`);
+				continue;
+			}
 
-	let command = `"${pythonScript}" api --bulk "${tempJsonPath}"`;
-	if (stripVersion) command += " --strip_version";
+			const { annotation, tags } = metadataParser.getFormattedMetadata(rawMetadata, stripVersion);
 
-	try {
-		// maxBuffer is increased just in case the JSON string for many files gets large
-		const { stdout } = await execPromise(command, { maxBuffer: 1024 * 1024 * 10 });
+			let modified = false;
 
-		if (stdout) {
-			let data = JSON.parse(stdout);
-
-			writeLog(`Python script finished extracting. Updating Eagle UI...`);
-
-			let successCount = 0;
-			for (let i = 0; i < items.length; i++) {
-				let item = items[i];
-				let result = data[item.id];
-
-				if (result) {
-					let annotation = result.annotation || "";
-					let tags = result.tags || [];
-					let modified = false;
-
-					if (!item.annotation && annotation !== "") {
+			if (annotation !== "") {
+				if (overwrite || !item.annotation) {
+					if (item.annotation !== annotation) {
 						item.annotation = annotation;
 						modified = true;
 					}
+				}
+			}
 
-					if (tags.length > 0 && addLoraTags) {
-						let currentTags = item.tags || [];
-						if (overwrite) {
-							// Only remove existing tags that start with "lora:"
-							let preservedTags = currentTags.filter(t => !t.toLowerCase().startsWith("lora:"));
-							item.tags = [...new Set([...preservedTags, ...tags])];
-						} else {
-							item.tags = [...new Set([...currentTags, ...tags])];
-						}
+			if (tags.length > 0 && addLoraTags) {
+				let currentTags = item.tags || [];
+				let newTags = [];
 
-						modified = true;
-					}
-
-					if (modified) {
-						await item.save();
-						successCount++;
-					}
+				if (overwrite) {
+					let preservedTags = currentTags.filter(t => !t.toLowerCase().startsWith('lora:'));
+					newTags = [...new Set([...preservedTags, ...tags])];
+				} else {
+					newTags = [...new Set([...currentTags, ...tags])];
 				}
 
-				if (isManual && progressBar) progressBar.value = i + 1;
+				if (currentTags.length !== newTags.length || !currentTags.every((t, i) => t === newTags[i])) {
+					item.tags = newTags;
+					modified = true;
+				}
 			}
-			if (successCount === 0) {
-				writeLog("No files were modified.");
-			} else if (successCount === 1) {
-				writeLog(`Finished updating ${successCount} file.`);
-			}  else {
-				writeLog(`Finished updating ${successCount} files.`);
+
+			if (modified) {
+				await item.save();
+				writeLog(`Extracted data for: ${item.name}`);
 			}
+
+		} catch (error) {
+			writeLog(`Extraction failed for: ${item.name}: ${error}`);
 		}
-	} catch (error) {
-		writeLog(`Extraction failed: ${error.message}`);
-	} finally {
-		// Clean up the temp file
-		if (fs.existsSync(tempJsonPath)) {
-			fs.unlinkSync(tempJsonPath);
-		}
+		if (isManual && progressBar) progressBar.value = i + 1;
 	}
 
 	if (isManual && progressBar) {
@@ -155,15 +126,13 @@ eagle.onPluginCreate((plugin) => {
 			isProcessing = true;
 			extractBtn.disabled = true;
 
-			const overwrite = chkOverwrite.checked;
+			const overwrite = chkOverwrite ? chkOverwrite.checked : false;
 			const loraTags = chkLoras.checked;
 			const stripVersion = chkStripVersion.checked;
 
-			progressBar.style.display = 'block';
-			progressBar.max = selectedItems.length;
-			progressBar.value = 0;
-
 			await extractMetadata(selectedItems, overwrite, loraTags, stripVersion, true);
+
+			writeLog("All selected files extracted");
 
 			isProcessing = false;
 			extractBtn.disabled = false;
@@ -213,22 +182,10 @@ eagle.onPluginCreate((plugin) => {
 				await extractMetadata(fullItems, false, true, true, false);
 			}
 		} catch (error) {
-			writeLog("Polling error: ", error);
+			writeLog(`Polling error: ${error}`);
 		} finally {
 			isProcessing = false;
 		}
 	}, POLL_INTERVAL);
 });
-
-// eagle.onPluginShow(() => {
-// });
-
-// eagle.onPluginRun(() => {
-// });
-
-// eagle.onPluginHide(() => {
-// });
-
-// eagle.onPluginBeforeExit((event) => {
-// });
 
