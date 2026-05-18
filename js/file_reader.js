@@ -39,7 +39,8 @@ async function load_video(filePath) {
 
 async function load_image(filePath) {
     try {
-        const metadata = await exifr.parse(filePath);
+        const metadata = await exifr.parse(filePath, true);
+        console.log(metadata);
 
         if (!metadata) return null;
 
@@ -59,11 +60,29 @@ async function load_image(filePath) {
         if (comment) {
             // Sometimes Exifr returns a raw Uint8Array instead of a string if it has a Unicode prefix
             if (comment instanceof Uint8Array) {
-                comment = new TextDecoder().decode(comment).replace(/^UNICODE\x00\x00|^ASCII\x00\x00\x00/, '');
+                const prefix = new TextDecoder('latin1').decode(comment.slice(0, 8));
+                const body = comment.slice(8);
+
+                if (prefix.startsWith('UNICODE')) {
+                    let decoded = new TextDecoder('utf-16be').decode(body);
+                    // If BE result has lots of null/control chars, it's probably LE
+                    if (/[\x00-\x08]/.test(decoded.slice(0, 20))) {
+                        decoded = new TextDecoder('utf-16le').decode(body);
+                    }
+                    comment = decoded;
+                } else if (prefix.startsWith('ASCII')) {
+                    comment = new TextDecoder('ascii').decode(body);
+                } else {
+                    comment = new TextDecoder().decode(body);
+                }
+
+                // Strip trailing nulls
+                comment = comment.replace(/\x00+$/, '').trim();
             }
 
             try {
-                JSON.parse(comment);
+                const parsed = JSON.parse(comment);
+                return parsed.prompt ? parsed.prompt : parsed;
             } catch (error) {
                 return { parameters: comment};
             }
