@@ -12,7 +12,8 @@ function extractA1111Metadata(parameters) {
         'size': "",
         'seed': "",
         'model': "",
-        'loras': {}
+        'loras': {},
+        'extra_params': {}
     };
 
     const parts = parameters.split('\nSteps: ');
@@ -23,10 +24,10 @@ function extractA1111Metadata(parameters) {
 
     if (promptPart.includes("Negative prompt:")) {
         let [pos, neg] = promptPart.split("Negative prompt:");
-        result.positive = pos ? pos.trim() : "";
+        result.positive = pos ? pos.replace(/<lora:[^>]+>/g, '').replace(/\s+/g, ' ').trim() : "";
         result.negative = neg ? neg.trim() : "";
     } else {
-        result.positive = promptPart.trim();
+        result.positive = promptPart.replace(/<lora:[^>]+>/g, '').replace(/\s+/g, ' ').trim();
     }
 
     function getSetting(key) {
@@ -46,6 +47,12 @@ function extractA1111Metadata(parameters) {
 
     const loraMatches = [...parameters.matchAll(/<lora:([^:]+):([^>]+)>/g)];
     result.loras = Object.fromEntries(loraMatches.map(m => [m[1], m[2]]));
+
+    const extraKeys = ['Distilled CFG Scale', 'Beta schedule alpha', 'Beta schedule beta'];
+    for (const key of extraKeys) {
+        const val = getSetting(key);
+        if (val) result.extra_params[key] = val;
+    }
 
     return result;
 }
