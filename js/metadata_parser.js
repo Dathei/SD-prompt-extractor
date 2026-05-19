@@ -74,7 +74,7 @@ function addLorasAsTags(loras, stripVersion = false) {
 
 function getFormattedMetadata(rawMetadata, stripVersion = false) {
      if (!rawMetadata) return {annotation: "", tags: []};
-
+     console.log("RAW: ", rawMetadata);
      let parsedDict = null;
 
      if (rawMetadata.parameters) {
@@ -85,7 +85,7 @@ function getFormattedMetadata(rawMetadata, stripVersion = false) {
              try { nodes = JSON.parse(nodes); } catch (e) { nodes = {}; }
          }
          parsedDict = extractComfyMetadata(nodes);
-     } else {
+     } else if (looksLikeComfyNodes(rawMetadata)) {
          parsedDict = extractComfyMetadata(rawMetadata);
      }
 
@@ -102,6 +102,14 @@ function getFormattedMetadata(rawMetadata, stripVersion = false) {
         tags: tags
     };
  }
+
+function looksLikeComfyNodes(obj) {
+    if (!obj || typeof obj !== 'object') return false;
+    // ComfyUI nodes are number keys and each value has a class_type field
+    const values = Object.values(obj);
+    if (values.length === 0) return false;
+    return values.some(v => v && typeof v === 'object' && 'class_type' in v);
+}
 
  module.exports = {
      getFormattedMetadata
