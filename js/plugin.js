@@ -3,9 +3,8 @@ const path = require('path');
 const fileReader = require(path.join(__dirname, 'js', 'file_reader'));
 const metadataParser = require(path.join(__dirname, 'js', 'metadata_parser'));
 
-const POLL_INTERVAL = 1000;
+const POLL_INTERVAL = 2500;
 
-// let lastSyncTime = Date.now();
 let isInitialized = false;
 let isProcessing = false;
 let knownItems = new Map();
@@ -146,9 +145,6 @@ eagle.onPluginCreate((plugin) => {
 		try {
 			let allFiles = await eagle.item.getIdsWithModifiedAt();
 
-			// This doesn't work:
-			// let modifiedFiles = allFiles.filter(file => file.modifiedAt > lastSyncTime);
-
 			if (!isInitialized) {
 				allFiles.forEach(file => {
 					knownItems.set(file.id, file.modifiedAt || 0)
@@ -157,6 +153,13 @@ eagle.onPluginCreate((plugin) => {
 				writeLog(`Plugin initialized. Tracking ${knownItems.size} items.`);
 				isProcessing = false;
 				return;
+			}
+
+			const currentIds = new Set(allFiles.map(f => f.id));
+			for (const id of knownItems.keys()) {
+				if (!currentIds.has(id)) {
+					knownItems.delete(id);
+				}
 			}
 
 			let modifiedIds = [];
