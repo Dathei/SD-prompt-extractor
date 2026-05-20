@@ -99,7 +99,7 @@ function resolveLinkedNode(link, nodes, targetParam = null, visited = new Set())
         }
 
     } catch (error) {
-        console.log(`Error resolving ${targetParam} on node ${targetId}: ${error}`);
+        console.error(`Error resolving ${targetParam} on node ${targetId}: ${error}`);
     }
     return null;
 }

@@ -1,5 +1,4 @@
 function extractA1111Metadata(parameters) {
-    console.log(parameters);
     if (!parameters) return null;
 
     let result = {

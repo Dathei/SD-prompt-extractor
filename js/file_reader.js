@@ -4,22 +4,31 @@ const fs = require('fs').promises;
 const VALID_FORMATS = ['.png', '.jpg', '.jpeg', '.mp4', '.mkv', '.webm', '.mov'];
 
 
-async function load_image(filePath) {
+async function loadImage(filePath) {
     try {
-        const metadata = await exifr.parse(filePath, true);
-        console.log(metadata);
+        let metadata = await exifr.parse(filePath, true);
+
+        if (filePath.toLowerCase().endsWith('.png')) {
+            // Text-chunk fallback if exifr failed to find parameters/prompt
+            if (!metadata || (!metadata.parameters && !metadata.prompt)) {
+                const buffer = await fs.readFile(filePath);
+                const bytes = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+                const chunks = parsePngTextChunks(bytes);
+                if (chunks?.parameters) return { parameters: chunks.parameters };
+                if (chunks?.prompt) {
+                    try { return JSON.parse(chunks.prompt); }
+                    catch { return { parameters: chunks.prompt }; }
+                }
+            }
+        }
 
         if (!metadata) return null;
 
         // ComfyUI png
-        if (metadata.prompt) {
-            return (typeof metadata.prompt === 'string') ? JSON.parse(metadata.prompt) : metadata.prompt;
-        }
+        if (metadata?.prompt) return typeof metadata.prompt === 'string' ? JSON.parse(metadata.prompt) : metadata.prompt;
 
         // A1111 png
-        if (metadata.parameters) {
-            return { parameters: metadata.parameters};
-        }
+        if (metadata?.parameters) return { parameters: metadata.parameters };
 
         // Jpg
         let comment = metadata.userComment || metadata.UserComment;
@@ -75,12 +84,55 @@ async function loadFile(filePath) {
     const isImage = ['.jpg', '.jpeg', '.png'].some(format => ext.endsWith(format));
 
     if (isImage) {
-        return await load_image(filePath);
+        return await loadImage(filePath);
     } else {
         return await loadVideo(filePath);
     }
 }
 
+function parsePngTextChunks(bytes) {
+    const sig = [0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A];      // PNG signature
+    for (let i = 0; i < 8; i++) if (bytes[i] !== sig[i]) return null;
+
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const result = {};
+    let offset = 8;
+
+    while (offset + 12 <= bytes.length) {
+        const length = view.getUint32(offset, false);
+        const type = String.fromCharCode(bytes[offset+4], bytes[offset+5], bytes[offset+6], bytes[offset+7]);
+        const dataStart = offset + 8;
+        const dataEnd = dataStart + length;
+        if (dataEnd + 4 > bytes.length) break;
+
+        if (type === 'tEXt') {
+            // keyword\0text
+            const nullIdx = bytes.indexOf(0, dataStart);
+            if (nullIdx !== -1 && nullIdx < dataEnd) {
+                const keyword = new TextDecoder('latin1').decode(bytes.slice(dataStart, nullIdx));
+                const text = new TextDecoder('utf-8').decode(bytes.slice(nullIdx + 1, dataEnd));
+                result[keyword] = text;
+            }
+        } else if (type === 'iTXt') {
+            // keyword\0 compFlag(1) compMethod(1) lang\0 translatedKeyword\0 text
+            const nullIdx = bytes.indexOf(0, dataStart);
+            if (nullIdx !== -1 && nullIdx + 4 < dataEnd) {
+                const keyword = new TextDecoder('latin1').decode(bytes.slice(dataStart, nullIdx));
+                const compressed = bytes[nullIdx + 1] === 1;
+                // skip compression method, lang tag, translated keyword
+                const langEnd = bytes.indexOf(0, nullIdx + 3);
+                const transEnd = bytes.indexOf(0, langEnd + 1);
+                if (transEnd !== -1 && transEnd < dataEnd && !compressed) {
+                    const text = new TextDecoder('utf-8').decode(bytes.slice(transEnd + 1, dataEnd));
+                    result[keyword] = text;
+                }
+            }
+        } else if (type === 'IEND') break;
+
+        offset = dataEnd + 4; // skip CRC
+    }
+    return result;
+}
 
 async function loadVideo(filePath) {
     try {
@@ -89,10 +141,6 @@ async function loadVideo(filePath) {
         let tags;
         if (bytes[0] === 0x1A && bytes[1] === 0x45 && bytes[2] === 0xDF && bytes[3] === 0xA3) {
             tags = extractMatroskaMetadata(bytes);
-            console.log('Matroska tags found:', Object.keys(tags));
-            console.log('Prompt length:', tags.prompt?.length);
-            console.log('Prompt start:', tags.prompt?.slice(0, 100));
-            console.log('Prompt end:', tags.prompt?.slice(-50));
         } else {
             tags = parseMp4Metadata(bytes);
         }
@@ -101,7 +149,6 @@ async function loadVideo(filePath) {
         let commentStr = null;
 
         for (const [key, value] of Object.entries(tags)) {
-            console.log('key: ', key);
             if (potentialKeys.some(k => key.toLowerCase().includes(k))) {
                 commentStr = value;
                 break;
@@ -116,9 +163,7 @@ async function loadVideo(filePath) {
                 // Matroska stores ComfyUI prompts as escaped strings, unescape if needed
                 str = trimToBalancedJson(str);
             }
-            const parsed = JSON.parse(str);
-            console.log('Parsed OK, top-level keys:', Object.keys(parsed).slice(0, 10));
-            return parsed;
+            return JSON.parse(str);
         } catch (e) {
             console.log('JSON parse failed:', e.message);
             return { parameters: commentStr };
@@ -156,11 +201,6 @@ function trimToBalancedJson(s) {
 }
 
 function parseMp4Metadata(bytes) {
-    const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-    const idx = text.indexOf('"prompt"');
-    console.log('prompt marker at:', idx);
-    console.log('context:', text.slice(idx, idx + 100));
-
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const decoder = new TextDecoder('utf-8');
     const readU32 = (o) => view.getUint32(o, false);
@@ -244,12 +284,9 @@ function parseMp4Metadata(bytes) {
 
 // ComfyUI's VideoHelperSuite Mp4s often are actually Matroska/WebM
 function extractMatroskaMetadata(bytes) {
-    // Decode the whole file as latin1 to keep byte offsets aligned with string indices.
-    // This is safe for finding ASCII markers, even though the file contains binary.
     const scanSlice = bytes.length > 2_000_000 ? bytes.slice(0, 2_000_000) : bytes;
     const asLatin1 = new TextDecoder('latin1').decode(scanSlice);
-    // Note: for large files, only scan the first ~2 MB. Matroska usually puts Tags
-    // at the start (SeekHead points to it) or end. If start fails, scan the end too.
+    // For large files, only scan the first 2 MB. If start fails, scan the end too.
 
     const result = {};
     const markers = ['prompt', 'workflow', 'comment', 'description'];

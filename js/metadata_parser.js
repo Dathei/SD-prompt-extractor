@@ -74,7 +74,6 @@ function addLorasAsTags(loras, stripVersion = false) {
 
 function getFormattedMetadata(rawMetadata, stripVersion = false) {
      if (!rawMetadata) return {annotation: "", tags: []};
-     console.log("RAW: ", rawMetadata);
      let parsedDict = null;
 
      if (rawMetadata.parameters) {
