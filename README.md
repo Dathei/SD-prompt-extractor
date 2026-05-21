@@ -7,7 +7,7 @@ A fast, robust metadata and prompt extractor for AI-generated images and videos.
 
 Built as an **Eagle Plugin** to automatically add prompt information to the annotation window.
 This provides a quick preview of which prompts and settings worked and which didn't.
-It supports **ComfyUI** and **A1111 WebUI** (and its forks like Forge, and Neo).
+It supports **ComfyUI** and **A1111 WebUI** (and its forks like reForge, and Neo).
 
 Runs silently in the background, instantly extracting full generation metadata from all modern local models whenever
 you add new files to Eagle.
@@ -29,14 +29,9 @@ prompt to the "Annotation" field.
   * You can access the interface via the Eagle Plugin menu (Puzzle icon at the top > Service) or by simply pressing the P shortcut
   and then clicking on this plugin.
 
-### Command Line Interface (CLI)
-* **Standalone Usage:** You can use the CLI script to parse directories or single files.
-* **Prompt Exporter:** Export random prompts from your library into a `.txt` file.
-Perfect for feeding your favorite styles into an LLM to generate new, unique prompt variations.
-
 
 ### Supported Platforms & Formats
-* **Generators:** ComfyUI, Automatic1111 (including Forks), CivitAI
+* **Platforms:** ComfyUI, Automatic1111 (including Forks), CivitAI
 * **Image Formats:** `.png`, `.jpg`, `.jpeg` 
 * **Video Formats:** `.mp4`, `.mkv`, `.webm`, `.mov`
 
@@ -54,4 +49,4 @@ install it from there.
 
 
 ## License
-MIT License. Feel free to fork, modify, and improve!
+This project is licensed under the [MIT License](./LICENSE). Feel free to fork and modify!

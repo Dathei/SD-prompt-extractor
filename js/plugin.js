@@ -3,7 +3,7 @@ const path = require('path');
 const fileReader = require(path.join(__dirname, 'js', 'file_reader'));
 const metadataParser = require(path.join(__dirname, 'js', 'metadata_parser'));
 
-const POLL_INTERVAL = 2500;
+const POLL_INTERVAL = 2000;
 
 let isInitialized = false;
 let isProcessing = false;
@@ -31,7 +31,10 @@ async function extractMetadata(items, overwrite = false, addLoraTags = true, str
 	for (let i = 0; i < items.length; i++) {
 		let item = items[i];
 
-		if (!overwrite && item.annotation) continue;
+		if (!overwrite && item.annotation && !addLoraTags) {
+			if (isManual && progressBar) progressBar.value = i + 1;
+			continue;
+		}
 
 		try {
 			const filePath = item.filePath;
@@ -131,7 +134,11 @@ eagle.onPluginCreate((plugin) => {
 
 			await extractMetadata(selectedItems, overwrite, loraTags, stripVersion, true);
 
-			writeLog("All selected files extracted");
+			if (selectedItems.length === 1) {
+				writeLog(`Extracted selected file`);
+			} else {
+				writeLog(`All ${selectedItems.length} selected files extracted`);
+			}
 
 			isProcessing = false;
 			extractBtn.disabled = false;
