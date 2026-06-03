@@ -202,6 +202,14 @@ function extractComfyPrompt(nodeData) {
         return extracted;
     }
 
+    // ImpactWildcardProcessor
+    const wildcardText = getStr('populated_text');
+    console.log(wildcardText);
+    if (wildcardText) {
+        extracted.text = wildcardText;
+        return extracted;
+    }
+
     // CLIPTextEncodeSDXL
     const textG = getStr('text_g');
     const textL = getStr('text_l');
@@ -239,7 +247,7 @@ function extractComfyPrompt(nodeData) {
         return extracted;
     }
 
-    // TextEncodeQwenImageEdit & TextEncodeZImageOmni & probably others
+    // TextEncodeQwenImageEdit, TextEncodeZImageOmni, Wildcard Processor (Mikey) & probably others
     const prompt = getStr('prompt');
     if (prompt) {
         extracted.text = prompt;
@@ -282,7 +290,7 @@ function extractComfyMetadata(nodes) {
         const inputs = nodeData.inputs || {};
 
         // Look for positive/negative prompt
-        const textNodes = ["easy positive", "easy negative", "wildcard processor"];
+        const textNodes = ["easy positive", "easy negative", "wildcard processor", "impactwildcardprocessor"];
         if (nodeType.includes('textencode') || textNodes.includes(nodeType)) {
             const extracted = extractComfyPrompt(nodeData);
 
