@@ -81,7 +81,7 @@ function getFormattedMetadata(rawMetadata, stripVersion = false) {
     } else if (rawMetadata.prompt) {
         let nodes = rawMetadata.prompt;
         if (typeof nodes === 'string') {
-            try { nodes = JSON.parse(nodes); } catch (e) { nodes = {}; }
+            try { nodes = JSON.parse(nodes.replace(/\bNaN\b/g, 'null')); } catch (e) { nodes = {}; }
         }
         parsedDict = extractComfyMetadata(nodes);
     } else if (looksLikeComfyNodes(rawMetadata)) {

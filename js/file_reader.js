@@ -4,6 +4,29 @@ const fs = require('fs').promises;
 const VALID_FORMATS = ['.png', '.jpg', '.jpeg', '.mp4', '.mkv', '.webm', '.mov'];
 
 
+function safeParseJSON(str) {
+    if (typeof str !== 'string') return str;
+    try {
+        return JSON.parse(str);
+    } catch (e) {
+        // Comfy sometimes exports illegal JSON primitives like NaN
+        let sanitized = str
+            .replace(/\bNaN\b/g, 'null')
+            .replace(/\bInfinity\b/g, '"Infinity"')
+            .replace(/\b-Infinity\b/g, '"-Infinity"');
+
+        // Strip out control characters that break JSON.parse
+        sanitized = sanitized.replace(/[\u0000-\u001F]+/g, "");
+
+        try {
+            return JSON.parse(sanitized);
+        } catch (e2) {
+            console.error(`JSON parse failure on string: ${sanitized.substring(0, 100)}`);
+            return null;
+        }
+    }
+}
+
 async function loadImage(filePath) {
     try {
         let metadata = await exifr.parse(filePath, true);
@@ -14,10 +37,14 @@ async function loadImage(filePath) {
                 const buffer = await fs.readFile(filePath);
                 const bytes = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
                 const chunks = parsePngTextChunks(bytes);
-                if (chunks?.parameters) return { parameters: chunks.parameters };
+                if (chunks?.parameters && !chunks?.prompt) {
+                    return { parameters: chunks.parameters };
+                }
                 if (chunks?.prompt) {
-                    try { return JSON.parse(chunks.prompt); }
-                    catch { return { parameters: chunks.prompt }; }
+                    let parsedPrompt = safeParseJSON(chunks.prompt);
+                    if (parsedPrompt) return parsedPrompt;
+                    if (chunks.parameters) return { parameters: chunks.parameters };
+                    return { parameters: chunks.prompt };
                 }
             }
         }
@@ -25,7 +52,10 @@ async function loadImage(filePath) {
         if (!metadata) return null;
 
         // ComfyUI png
-        if (metadata?.prompt) return typeof metadata.prompt === 'string' ? JSON.parse(metadata.prompt) : metadata.prompt;
+        if (metadata?.prompt) {
+            let parsedPrompt = safeParseJSON(metadata.prompt);
+            if (parsedPrompt) return parsedPrompt;
+        }
 
         // A1111 png
         if (metadata?.parameters) return { parameters: metadata.parameters };
@@ -56,12 +86,11 @@ async function loadImage(filePath) {
                 comment = comment.replace(/\x00+$/, '').trim();
             }
 
-            try {
-                const parsed = JSON.parse(comment);
-                return parsed.prompt ? parsed.prompt : parsed;
-            } catch (error) {
-                return { parameters: comment};
+            let parsedComment = safeParseJSON(comment);
+            if (parsedComment) {
+                return parsedComment.prompt ? parsedComment.prompt : parsedComment;
             }
+            return { parameters: comment };
         }
 
         return metadata;

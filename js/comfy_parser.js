@@ -250,8 +250,8 @@ function extractComfyPrompt(nodeData) {
 }
 
 function extractComfyMetadata(nodes) {
-    console.log("TEST");
-    console.log(nodes);
+    // For debugging workflows:
+    // console.log(JSON.stringify(nodes, null, 2));
 
     if (!nodes || Object.keys(nodes).length === 0) return {};
 
