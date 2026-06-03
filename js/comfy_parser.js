@@ -14,7 +14,7 @@ function resolveLinkedNode(link, nodes, targetParam = null, visited = new Set())
 
     const targetNode = nodes[targetId] || {};
     const inputs = targetNode.inputs || {};
-    const classType = (inputs['class'] || inputs.class_type || '').toLowerCase();
+    const classType = (inputs['class'] || targetNode.class_type || '').toLowerCase();
 
     try {
         // Handle explicit value/primitives
@@ -34,6 +34,21 @@ function resolveLinkedNode(link, nodes, targetParam = null, visited = new Set())
                 return resolveLinkedNode(inputs.on_true, nodes, targetParam, visited);
             } else if (!switchValue && 'on_false' in inputs) {
                 return resolveLinkedNode(inputs.on_false, nodes, targetParam, visited);
+            }
+        }
+
+        // Handle reroutes
+        if (classType.includes('reroute') || classType.includes('showanything')) {
+            console.log(inputs);
+            if ('text' in inputs && typeof inputs.text === 'string' && inputs.text.trim() !== '') {
+                return inputs.text;
+            }
+            const passThroughKeys = ['anything', 'value'];
+            for (let key of passThroughKeys) {
+                if (key in inputs) {
+                    let passValue = inputs[key];
+                    return Array.isArray(passValue) ? resolveLinkedNode(passValue, nodes, targetParam, visited) : passValue;
+                }
             }
         }
 
