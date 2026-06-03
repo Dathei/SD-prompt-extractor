@@ -39,7 +39,7 @@ function extractA1111Metadata(parameters) {
 
     result.steps = getSetting("Steps");
     result.sampler = getSetting("Sampler");
-    result.scheduler = getSetting("Schedule type");
+    result.scheduler = getSetting("Schedule type") || getSetting("Scheduler");
     result.cfg = getSetting("CFG scale");
     result.seed = getSetting("Seed");
     result.size = getSetting("Size");

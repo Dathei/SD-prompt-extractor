@@ -250,6 +250,9 @@ function extractComfyPrompt(nodeData) {
 }
 
 function extractComfyMetadata(nodes) {
+    console.log("TEST");
+    console.log(nodes);
+
     if (!nodes || Object.keys(nodes).length === 0) return {};
 
     // Prune inactive nodes

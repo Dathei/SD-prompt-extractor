@@ -49,12 +49,10 @@ async function extractMetadata(items, overwrite = false, addLoraTags = true, str
 
 			let modified = false;
 
-			if (annotation !== "") {
-				if (overwrite || !item.annotation) {
-					if (item.annotation !== annotation) {
-						item.annotation = annotation;
-						modified = true;
-					}
+			if (annotation !== "" && (overwrite || !item.annotation)) {
+				if (item.annotation !== annotation) {
+					item.annotation = annotation;
+					modified = true;
 				}
 			}
 
@@ -134,9 +132,7 @@ eagle.onPluginCreate((plugin) => {
 
 			await extractMetadata(selectedItems, overwrite, loraTags, stripVersion, true);
 
-			if (selectedItems.length === 1) {
-				writeLog(`Extracted selected file`);
-			} else {
+			if (selectedItems.length > 1) {
 				writeLog(`All ${selectedItems.length} selected files extracted`);
 			}
 
@@ -144,6 +140,9 @@ eagle.onPluginCreate((plugin) => {
 			extractBtn.disabled = false;
 		});
 	}
+
+	let lastDetectedTime = 0;
+	let pendingIds = new Set();
 
 	setInterval(async () => {
 		if (isProcessing) return;
@@ -162,6 +161,7 @@ eagle.onPluginCreate((plugin) => {
 				return;
 			}
 
+			// Clean up deleted items
 			const currentIds = new Set(allFiles.map(f => f.id));
 			for (const id of knownItems.keys()) {
 				if (!currentIds.has(id)) {
@@ -169,27 +169,33 @@ eagle.onPluginCreate((plugin) => {
 				}
 			}
 
-			let modifiedIds = [];
+			let newItemsFound = false;
 
 			for (let file of allFiles) {
 				let prevModified = knownItems.get(file.id);
 				let currModified = file.modifiedAt || 0;
 
 				if (prevModified === undefined) {
-					modifiedIds.push(file.id);
 					knownItems.set(file.id, currModified);
+					pendingIds.add(file.id);
+					newItemsFound = true;
 				}
 			}
 
-			if (modifiedIds.length > 0) {
-				if (modifiedIds.length === 1) {
-					writeLog(`Found ${modifiedIds.length} new item.`);
-				} else {
-					writeLog(`Found ${modifiedIds.length} new items.`);
-				}
-				let fullItems = await eagle.item.getByIds(modifiedIds);
+			if (newItemsFound) {
+				lastDetectedTime = Date.now();
+			}
 
-				await extractMetadata(fullItems, false, true, true, false);
+			// Letting Eagle finish importing before writing into the annotation field
+			if (pendingIds.size > 0 && (Date.now() - lastDetectedTime > 3000)) {
+				let idsToProcess = Array.from(pendingIds);
+				pendingIds.clear();
+
+				writeLog(`Processing batch of ${idsToProcess.length} item(s)...`);
+
+				let fullItems = await eagle.item.getByIds(idsToProcess);
+
+				await extractMetadata(fullItems, true, true, true, false);
 			}
 		} catch (error) {
 			writeLog(`Polling error: ${error}`);

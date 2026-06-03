@@ -1,7 +1,7 @@
 const {extractA1111Metadata} = require("./a1111_parser");
 const {extractComfyMetadata} = require("./comfy_parser");
 
- const capitalize = (s) => (typeof s === 'string' && s.length > 0) ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+const capitalize = (s) => (typeof s === 'string' && s.length > 0) ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 
 function formatParameters(parameters) {
     const parts = [];
@@ -73,20 +73,20 @@ function addLorasAsTags(loras, stripVersion = false) {
 }
 
 function getFormattedMetadata(rawMetadata, stripVersion = false) {
-     if (!rawMetadata) return {annotation: "", tags: []};
-     let parsedDict = null;
+    if (!rawMetadata) return {annotation: "", tags: []};
+    let parsedDict = null;
 
-     if (rawMetadata.parameters) {
-         parsedDict = extractA1111Metadata(rawMetadata.parameters);
-     } else if (rawMetadata.prompt) {
-         let nodes = rawMetadata.prompt;
-         if (typeof nodes === 'string') {
-             try { nodes = JSON.parse(nodes); } catch (e) { nodes = {}; }
-         }
-         parsedDict = extractComfyMetadata(nodes);
-     } else if (looksLikeComfyNodes(rawMetadata)) {
-         parsedDict = extractComfyMetadata(rawMetadata);
-     }
+    if (rawMetadata.parameters) {
+        parsedDict = extractA1111Metadata(rawMetadata.parameters);
+    } else if (rawMetadata.prompt) {
+        let nodes = rawMetadata.prompt;
+        if (typeof nodes === 'string') {
+            try { nodes = JSON.parse(nodes); } catch (e) { nodes = {}; }
+        }
+        parsedDict = extractComfyMetadata(nodes);
+    } else if (looksLikeComfyNodes(rawMetadata)) {
+        parsedDict = extractComfyMetadata(rawMetadata);
+    }
 
     if (!parsedDict) return { annotation: "", tags: [] };
 
