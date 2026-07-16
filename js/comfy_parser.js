@@ -374,10 +374,124 @@ function pickMainSampler(chain, nodes) {
 }
 
 
+// Conditioning traversal (positive/negative prompt)
+const COND_FOLLOW_RX = /cond|positive|negative|prompt|text|pipe|base/;
+const COND_STOP_KEYS = [
+    'clip', 'model', 'vae', 'control_net', 'clip_vision', 'style_model',
+    'mask', 'image', 'images', 'pixels', 'latent_image', 'samples',
+    'noise', 'sampler', 'sigmas', 'guider'
+];
+
+function traceCondTexts(link, nodes, which, visited = new Set(), out = null) {
+    if (!out) out = { texts: [], zeroed: false };
+    if (!Array.isArray(link) || link.length < 1) return out;
+
+    const nodeId = link[0].toString();
+    if (visited.has(nodeId)) return out;
+    visited.add(nodeId);
+
+    const node = nodes[nodeId];
+    if (!node) return out;
+
+    const inputs = node.inputs || {};
+    const classType = (node.class_type || '').toLowerCase();
+
+    // ConditioningZeroOut
+    if (classType.includes('zeroout')) {
+        out.zeroed = true;
+        return out;
+    }
+
+    const extracted = extractComfyPrompt(node);
+    let text = extracted[which] || extracted.text;
+
+    // Text widgets can themselves be links (primitives, wildcard nodes, ...)
+    if (!text) {
+        const textKeys = ['text', 'populated_text', 'prompt', which, which + '_prompt'];
+        for (const key of textKeys) {
+            if (Array.isArray(inputs[key])) {
+                const resolved = resolveLinkedNode(inputs[key], nodes, 'text');
+                if (typeof resolved === 'string' && resolved.trim()) {
+                    text = resolved.trim();
+                    break;
+                }
+            }
+        }
+    }
+    if (text) {
+        out.texts.push(text);
+        return out;
+    }
+
+    if (classType.includes('textencode')) return out;
+
+    // Follow condition-like links
+    // For unknown nodes fall back to everything except clearly wrong keys
+    const linkEntries = Object.entries(inputs).filter(([, v]) => Array.isArray(v) && v.length > 0);
+    let toFollow = linkEntries.filter(([k]) => COND_FOLLOW_RX.test(k));
+    if (toFollow.length === 0) {
+        toFollow = linkEntries.filter(([k]) => !COND_STOP_KEYS.includes(k));
+    }
+    for (const [, l] of toFollow) {
+        traceCondTexts(l, nodes, which, visited, out);
+    }
+    return out;
+}
+
+
+function getCondLinks(samplerInputs, nodes) {
+    let pos = samplerInputs.positive || samplerInputs.cond || null;
+    let neg = samplerInputs.negative || null;
+
+    // SamplerCustomAdvanced hides conditioning behind a guider
+    if (!pos && Array.isArray(samplerInputs.guider)) {
+        const guider = nodes[samplerInputs.guider[0].toString()];
+        const gInputs = guider ? (guider.inputs || {}) : {};
+        pos = gInputs.positive || gInputs.conditioning || null;
+        neg = gInputs.negative || null;
+    }
+
+    return {
+        pos: Array.isArray(pos) ? pos : null,
+        neg: Array.isArray(neg) ? neg : null,
+        // In case the prompt was embedded as a plain string
+        posStr: typeof pos === 'string' && pos.trim() ? pos.trim() : null,
+        negStr: typeof neg === 'string' && neg.trim() ? neg.trim() : null
+    };
+}
+
+
+function traceModelName(link, nodes, visited = new Set()) {
+    if (!Array.isArray(link) || link.length < 1) return null;
+    const nodeId = link[0].toString();
+    if (visited.has(nodeId)) return null;
+    visited.add(nodeId);
+
+    const node = nodes[nodeId];
+    if (!node) return null;
+    const inputs = node.inputs || {};
+
+    // Loader reached: a string input naming the model file
+    for (const [k, v] of Object.entries(inputs)) {
+        if (typeof v === 'string' && v.trim() && !k.includes('lora') &&
+            (k.includes('ckpt') || k.includes('unet') || k.includes('gguf') || k.endsWith('_name'))) {
+            return v.split(/[\\/]/).pop();
+        }
+    }
+
+    for (const [k, v] of Object.entries(inputs)) {
+        if (Array.isArray(v) && v.length > 0 && /model|guider|pipe|sigmas/.test(k)) {
+            const found = traceModelName(v, nodes, visited);
+            if (found) return found;
+        }
+    }
+    return null;
+}
+
 
 function extractComfyMetadata(nodes) {
     // For debugging workflows:
-    console.log(JSON.stringify(nodes, null, 2));
+    // console.log(JSON.stringify(nodes, null, 2));
 
     if (!nodes || Object.keys(nodes).length === 0) return {};
 
@@ -429,9 +543,38 @@ function extractComfyMetadata(nodes) {
         if (Array.isArray(seedVal)) seedVal = resolveLinkedNode(seedVal, nodes, 'seed');
         if (seedVal !== null && seedVal !== undefined && typeof seedVal !== 'object') result.seed = seedVal;
 
+        const cond = getCondLinks(mIn, nodes);
+        if (cond.posStr) result.positive = cond.posStr;
+        if (cond.negStr) result.negative = cond.negStr;
+
+        if (!result.positive && cond.pos) {
+            const traced = traceCondTexts(cond.pos, nodes, 'positive');
+            if (traced.texts.length > 0) {
+                result.positive = [...new Set(traced.texts)].join(', ');
+            }
+        }
+        if (!result.negative && cond.neg) {
+            const traced = traceCondTexts(cond.neg, nodes, 'negative');
+            if (traced.zeroed || traced.texts.length === 0) {
+                emptyNegative = true;
+            } else {
+                result.negative = [...new Set(traced.texts)].join(', ');
+            }
+        }
+        // No negative conditioning at all
+        if (result.positive && !cond.neg && !cond.negStr && !result.negative) {
+            emptyNegative = true;
+        }
+
+        // The model that actually fed the main pass
+        const modelLink = mIn.model || mIn.guider || mIn.sigmas;
+        if (Array.isArray(modelLink)) {
+            const modelName = traceModelName(modelLink, nodes);
+            if (modelName) result.model = modelName;
+        }
     }
 
-
+    // Flat scan (fallbacks, LoRAs, size, guidance)
     for (const nodeData of Object.values(nodes)) {
         const nodeType = (nodeData.class_type || '').toLowerCase();
         const inputs = nodeData.inputs || {};
