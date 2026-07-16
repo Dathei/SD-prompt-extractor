@@ -272,9 +272,112 @@ function extractComfyPrompt(nodeData) {
     return extracted;
 }
 
+
+const LATENT_LINK_KEYS = [
+    'latent_image', 'latent', 'latents', 'samples', 'image', 'images', 'pixels', 'video'
+];
+
+function isSamplerPass(inputs) {
+    if (!('steps' in inputs) && !('sigmas' in inputs)) return false;
+    return Object.entries(inputs).some(([k,v]) => Array.isArray(v) && LATENT_LINK_KEYS.includes(k));
+}
+
+function traceSamplingChain(nodeId, nodes, visited, chain) {
+    nodeId = nodeId.toString();
+    if (visited.has(nodeId)) return;
+    visited.add(nodeId);
+
+    const node = nodes[nodeId];
+    if (!node) return;
+
+    const inputs = node.inputs || {};
+    const linkEntries = Object.entries(inputs).filter(([,v]) => Array.isArray(v) && v.length > 0);
+
+    if (isSamplerPass(inputs)) {
+        chain.push({ id: nodeId, inputs: inputs, classType: node.class_type || '' });
+
+        for (const [key,link] of linkEntries) {
+            if (LATENT_LINK_KEYS.includes(key)) {
+                traceSamplingChain(link[0], nodes, visited, chain);
+            }
+        }
+        return;
+    }
+
+    // Prefer latent link connections, otherwise follow anything else (reroutes/unknown custom nodes)
+    const latentLinks = Object.entries(linkEntries).filter(([k]) => LATENT_LINK_KEYS.includes(k));
+    const toFollow = latentLinks.length > 0 ? latentLinks : linkEntries;
+    for (const [, link] of toFollow) {
+        traceSamplingChain(link[0], nodes, visited, chain);
+    }
+}
+
+
+function findSamplerChain(nodes) {
+    const referenced = new Set();
+    for (const data of Object.values(nodes)) {
+        for (const val of Object.values(data.inputs || {})) {
+            if (Array.isArray(val) && val.length > 0) {
+                referenced.add(val[0]).toString();
+            }
+        }
+    }
+    const sinks = Object.keys(nodes).filter(nId => !referenced.has(nId));
+
+    // Prefer save nodes over preview nodes
+    const sinkScore = (id) => {
+        const t = (nodes[id].class_type || '').toLowerCase();
+        if (t.includes('save') || t.includes('combine')) return 0;
+        if (t.includes('preview') || t.includes('compare')) return 2;
+        return 1;
+    }
+    sinks.sort((a, b) => sinkScore(a) - sinkScore(b));
+
+    const chain = [];
+    const visited = new Set();
+    for (const sink of sinks) {
+        traceSamplingChain(sink, nodes, visited, chain);
+        if (chain.length > 0) break;
+    }
+    return chain;
+}
+
+// Find out how much of the image this pass (re)generates. 1.0 = full generation.
+// This is to avoid pre-processing passes (they have denoise < 1.0)
+function denoiseFraction(inputs, nodes) {
+    let d = inputs.denoise;
+    if (Array.isArray(d)) d = resolveLinkedNode(d, nodes, 'denoise');
+    if (d !== undefined && d !== null && d !== '') {
+        const f = parseFloat(d);
+        if (!isNaN(f)) return f;
+    }
+    // KSamplerAdvanced-style refiner passes
+    if (inputs.add_noise === 'disable' || inputs.add_noise === false) return 0.0;
+    let sas = inputs.start_at_step;
+    if (Array.isArray(sas)) sas = resolveLinkedNode(sas, nodes, 'start_at_step');
+    if (sas !== undefined && parseFloat(sas) > 0) return 0.5;
+    // SamplerCustom-style: denoise lives on the scheduler behind sigmas
+    if (Array.isArray(inputs.sigmas)) {
+        const f = parseFloat(resolveLinkedNode(inputs.sigmas, nodes, 'denoise'));
+        if (!isNaN(f)) return f;
+    }
+    return 1.0;     // might cause problems, maybe better to return null as default
+}
+
+function pickMainSampler(chain, nodes) {
+    if (!chain || chain.length === 0) return null;
+    for (const pass of chain) {
+        if (denoiseFraction(pass.inputs, nodes) >= 0.99) return pass;
+    }
+    // Fallback: Full denoise not found, return earliest pass (e.g. when doing img2img)
+    return chain[chain.length - 1];
+}
+
+
+
 function extractComfyMetadata(nodes) {
     // For debugging workflows:
-    // console.log(JSON.stringify(nodes, null, 2));
+    console.log(JSON.stringify(nodes, null, 2));
 
     if (!nodes || Object.keys(nodes).length === 0) return {};
 
@@ -299,6 +402,35 @@ function extractComfyMetadata(nodes) {
     let potentialPrompts = [];
     const ksamplers = [];
     let emptyNegative = false;
+
+    const samplerChain = findSamplerChain(nodes);
+    const mainSampler = pickMainSampler(samplerChain, nodes);
+
+    if (mainSampler) {
+        const mIn = mainSampler.inputs;
+
+        let steps = mIn.steps || mIn.sigmas;
+        if (Array.isArray(steps)) steps = resolveLinkedNode(steps, nodes, 'steps');
+        if (steps) result.steps = steps;
+
+        let samplerVal = mIn.sampler || mIn.sampler_name;
+        if (Array.isArray(samplerVal)) samplerVal = resolveLinkedNode(samplerVal, nodes, 'sampler');
+        if (samplerVal && typeof samplerVal === 'string') result.sampler = samplerVal;
+
+        let schedulerVal = mIn.scheduler || mIn.sigmas;
+        if (Array.isArray(schedulerVal)) schedulerVal = resolveLinkedNode(schedulerVal, nodes, 'scheduler');
+        if (schedulerVal && typeof schedulerVal === 'string') result.scheduler = schedulerVal;
+
+        let cfgVal = mIn.cfg || mIn.guider;
+        if (Array.isArray(cfgVal)) cfgVal = resolveLinkedNode(cfgVal, nodes, 'cfg');
+        if (cfgVal !== null && cfgVal !== undefined && typeof cfgVal !== 'object') result.cfg = cfgVal;
+
+        let seedVal = mIn.seed || mIn.noise_seed || mIn.noise;
+        if (Array.isArray(seedVal)) seedVal = resolveLinkedNode(seedVal, nodes, 'seed');
+        if (seedVal !== null && seedVal !== undefined && typeof seedVal !== 'object') result.seed = seedVal;
+
+    }
+
 
     for (const nodeData of Object.values(nodes)) {
         const nodeType = (nodeData.class_type || '').toLowerCase();
