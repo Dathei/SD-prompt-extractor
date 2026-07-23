@@ -9,6 +9,21 @@ let isInitialized = false;
 let isProcessing = false;
 let knownItems = new Map();
 
+const SETTINGS_KEY = 'sd-prompt-extractor.settings';
+
+
+function loadSettings() {
+	try {
+		return { overwrite: false, addLoraTags: true, stripVersion: false,
+				...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
+	} catch (e) {
+		return {overwrite: false, addLoraTags: true, stripVersion: false}
+	}
+}
+
+function saveSettings(s) {
+	try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch (e) {}
+}
 
 
 function writeLog(message) {
@@ -46,6 +61,7 @@ async function extractMetadata(items, overwrite = false, addLoraTags = true, str
 
 			if (!rawMetadata) {
 				writeLog(`No metadata found for: ${item.name}`);
+				if (isManual && progressBar) progressBar.value = i + 1;
 				continue;
 			}
 
@@ -103,6 +119,24 @@ eagle.onPluginCreate((plugin) => {
 	const chkStripVersion = document.getElementById('chkStripVersion');
 
 	let selectedItems = [];
+
+	let settings = loadSettings();
+	if (chkOverwrite) chkOverwrite.checked = settings.overwrite;
+	if (chkLoras) chkLoras.checked = settings.addLoraTags;
+	if (chkStripVersion) {
+		chkStripVersion.checked = settings.stripVersion;
+		chkStripVersion.disabled = !settings.addLoraTags;
+	}
+	[chkOverwrite, chkLoras, chkStripVersion].forEach(el => {
+		el.addEventListener('change', () => {
+			settings = {
+				overwrite: chkOverwrite ? chkOverwrite.checked : false,
+				addLoraTags: chkLoras ? chkLoras.checked : true,
+				stripVersion: chkStripVersion ? chkStripVersion.checked : true,
+			};
+			saveSettings(settings)
+		});
+	});
 
 	if (chkLoras && chkStripVersion) {
 		chkLoras.addEventListener('change', (e) => {
@@ -201,7 +235,7 @@ eagle.onPluginCreate((plugin) => {
 
 				let fullItems = await eagle.item.getByIds(idsToProcess);
 
-				await extractMetadata(fullItems, false, true, false, false);
+				await extractMetadata(fullItems, settings.overwrite, settings.addLoraTags, settings.stripVersion, false);
 			}
 		} catch (error) {
 			writeLog(`Polling error: ${error}`);
