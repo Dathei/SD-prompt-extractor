@@ -166,7 +166,7 @@ eagle.onPluginCreate((plugin) => {
 			isProcessing = true;
 			extractBtn.disabled = true;
 
-			const overwrite = chkOverwrite ? chkOverwrite.checked : false;
+			const overwrite = chkOverwrite.checked;
 			const loraTags = chkLoras.checked;
 			const stripVersion = chkStripVersion.checked;
 

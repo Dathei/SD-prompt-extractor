@@ -2,7 +2,7 @@ const exifr = require('exifr');
 const fs = require('fs').promises;
 
 const VALID_FORMATS = ['.png', '.jpg', '.jpeg', '.mp4', '.mkv', '.webm', '.mov'];
-
+const MAX_VIDEO_SIZE = 500 * 1024 * 1024;
 
 function safeParseJSON(str) {
     if (typeof str !== 'string') return str;
@@ -163,16 +163,71 @@ function parsePngTextChunks(bytes) {
     return result;
 }
 
+async function readRange(filePath, start, length) {
+    const handle = await fs.open(filePath, 'r');
+    try {
+        const buf = Buffer.alloc(length);
+        const { bytesRead } = await handle.read(buf, 0, length, start);
+        return new Uint8Array(buf.buffer, buf.byteOffset, bytesRead);
+    } finally {
+        await handle.close();
+    }
+}
+
+function isMatroska(bytes) {
+    return bytes.length >=4 && bytes[0] === 0x1A && bytes[1] === 0x45 && bytes[2] === 0xDF && bytes[3] === 0xA3;
+}
+
+async function findTopLevelBox(filePath, fileSize, searchType) {
+    let offset = 0;
+    while (offset + 8 <= fileSize) {
+        const header = await readRange(filePath, offset, 16);
+        if (header.length < 8) return null;
+        const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
+
+        let size = view.getUint32(0, false);
+        let headerLen = 8;
+        const type = String.fromCharCode(header[4], header[5], header[6], header[7]);
+
+        if (size === 1) {
+            // 64-bit extended size, common for large mdat
+            if (header.length < 16) return null;
+            size = Number(view.getBigUint64(8, false));
+            headerLen = 16;
+        } else if (size === 0) {
+            size = fileSize - offset;  // box extends to EOF
+        }
+
+        if (size < headerLen) return null;
+        if (type === searchType) return { offset, size };
+        offset += size;
+    }
+    return null;
+}
+
 async function loadVideo(filePath) {
     try {
-        const buffer = await fs.readFile(filePath);
-        const bytes = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-        let tags;
-        if (bytes[0] === 0x1A && bytes[1] === 0x45 && bytes[2] === 0xDF && bytes[3] === 0xA3) {
-            tags = extractMatroskaMetadata(bytes);
-        } else {
-            tags = parseMp4Metadata(bytes);
+        const HEAD = 4 * 1024 * 1024;
+        const stats = await fs.stat(filePath);
+
+        if (stats.size > MAX_VIDEO_SIZE) {
+            console.log(`Video extraction skipped for "${filePath}": ${(stats.size / 1024 / 1024).toFixed(1)} MB exceeds the ${MAX_VIDEO_SIZE / 1024 / 1024} MB limit`);
+            return null;
         }
+
+        const head = await readRange(filePath, 0, Math.min(HEAD, stats.size));
+
+        let tags;
+        if (isMatroska(head)) {
+            tags = extractMatroskaMetadata(head);
+        } else {
+            const moovBox = await findTopLevelBox(filePath, stats.size, 'moov');
+            if (!moovBox) return null;
+            const moovBytes = await readRange(filePath, moovBox.offset, moovBox.size);
+            tags = parseMp4Metadata(moovBytes);
+        }
+
+        if (!tags || Object.keys(tags).length === 0) return null;
 
         const potentialKeys = ['comment', 'prompt', 'workflow', 'description', '©cmt', '©des'];
         let commentStr = null;
@@ -194,7 +249,7 @@ async function loadVideo(filePath) {
             }
             return JSON.parse(str);
         } catch (e) {
-            console.log('JSON parse failed:', e.message);
+            console.error('JSON parse failed:', e.message);
             return { parameters: commentStr };
         }
     } catch (error) {
