@@ -72,34 +72,35 @@ function addLorasAsTags(loras, stripVersion = false) {
     return tags;
 }
 
-function getFormattedMetadata(rawMetadata, stripVersion = false) {
-    if (!rawMetadata) return {annotation: "", tags: []};
-    let parsedDict = null;
-
-    if (rawMetadata.parameters) {
-        parsedDict = extractA1111Metadata(rawMetadata.parameters);
-    } else if (rawMetadata.prompt) {
+function parseRaw(rawMetadata) {
+    if (!rawMetadata) return null;
+    if (rawMetadata.parameters) return extractA1111Metadata(rawMetadata.parameters);
+    if (rawMetadata.prompt) {
         let nodes = rawMetadata.prompt;
         if (typeof nodes === 'string') {
             try { nodes = JSON.parse(nodes.replace(/\bNaN\b/g, 'null')); } catch (e) { nodes = {}; }
         }
-        parsedDict = extractComfyMetadata(nodes);
-    } else if (looksLikeComfyNodes(rawMetadata)) {
-        parsedDict = extractComfyMetadata(rawMetadata);
+        return extractComfyMetadata(nodes);
     }
+    if (looksLikeComfyNodes(rawMetadata)) return extractComfyMetadata(rawMetadata);
+    return null;
+}
 
-    if (!parsedDict) return { annotation: "", tags: [] };
+function getFormattedMetadata(rawMetadata, stripVersion = false) {
+    const parsed = parseRaw(rawMetadata);
+    if (!parsed) return { annotation: "", tags: [] };
 
-    let annotation = formatParameters(parsedDict);
+    let annotation = formatParameters(parsed);
     // Cleanup space after commas
     annotation = annotation.replace(/,(\w)/g, ', $1');
 
-    let tags = addLorasAsTags(parsedDict.loras, stripVersion);
+    let tags = addLorasAsTags(parsed.loras, stripVersion);
+    const pluginTags = [...new Set([
+        ...addLorasAsTags(parsed.loras, true),
+        ...addLorasAsTags(parsed.loras, false)
+    ])];
 
-    return {
-        annotation: annotation,
-        tags: tags
-    };
+    return { annotation, tags, pluginTags };
  }
 
 function looksLikeComfyNodes(obj) {

@@ -36,6 +36,10 @@ async function extractMetadata(items, overwrite = false, addLoraTags = true, str
 			continue;
 		}
 
+		const [fresh] = await eagle.item.getByIds([item.id]);
+		if (!fresh) continue;
+		item = fresh;
+
 		try {
 			const filePath = item.filePath;
 			const rawMetadata = await fileReader.loadFile(filePath);
@@ -45,7 +49,7 @@ async function extractMetadata(items, overwrite = false, addLoraTags = true, str
 				continue;
 			}
 
-			const { annotation, tags } = metadataParser.getFormattedMetadata(rawMetadata, stripVersion);
+			const { annotation, tags, pluginTags } = metadataParser.getFormattedMetadata(rawMetadata, stripVersion);
 
 			let modified = false;
 
@@ -60,8 +64,10 @@ async function extractMetadata(items, overwrite = false, addLoraTags = true, str
 				let currentTags = item.tags || [];
 				let newTags = [];
 
+				const ownedTags = new Set(pluginTags.map(t => t.toLowerCase()));
+
 				if (overwrite) {
-					let preservedTags = currentTags.filter(t => !t.toLowerCase().startsWith('lora:'));
+					const preservedTags = currentTags.filter(t => !ownedTags.has(t.toLowerCase()));
 					newTags = [...new Set([...preservedTags, ...tags])];
 				} else {
 					newTags = [...new Set([...currentTags, ...tags])];
@@ -195,7 +201,7 @@ eagle.onPluginCreate((plugin) => {
 
 				let fullItems = await eagle.item.getByIds(idsToProcess);
 
-				await extractMetadata(fullItems, true, true, true, false);
+				await extractMetadata(fullItems, false, true, false, false);
 			}
 		} catch (error) {
 			writeLog(`Polling error: ${error}`);
