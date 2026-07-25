@@ -56,7 +56,7 @@ function addLorasAsTags(loras, stripVersion = false) {
     if (!loras) return [];
 
     const tags = [];
-    const versionPattern = /(?:[_-]|(?<=[a-zA-Z]))(?:[vV]\d+(?:[.-]\d+)?|0+\d+)(?=[_-]|$)|[_-]\d+(?:[.-]\d+)?$/g;
+    const versionPattern = /(?:[_-]|(?<=[a-zA-Z]))(?:[vV]\d+(?:[_.-]\d+)?|0+\d+)(?=[_-]|$)|[_-](?:epoch|ep|st)[_-]?\d+(?=[_-]|$)/g;
 
     for (let loraName of Object.keys(loras)) {
         if (stripVersion) {
@@ -112,7 +112,8 @@ function looksLikeComfyNodes(obj) {
 }
 
  module.exports = {
-     getFormattedMetadata
+    addLorasAsTags,
+    getFormattedMetadata
  };
 
 
