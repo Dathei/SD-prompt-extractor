@@ -4,6 +4,9 @@ const fs = require('fs').promises;
 const VALID_FORMATS = ['.png', '.jpg', '.jpeg', '.mp4', '.mkv', '.webm', '.mov'];
 const MAX_VIDEO_SIZE = 500 * 1024 * 1024;
 
+let logger = () => {};
+function setLogger(fn) { logger = fn || (() => {}); }
+
 function safeParseJSON(str) {
     if (typeof str !== 'string') return str;
     try {
@@ -181,6 +184,7 @@ function isMatroska(bytes) {
 async function findTopLevelBox(filePath, fileSize, searchType) {
     let offset = 0;
     while (offset + 8 <= fileSize) {
+        // Read 16 bytes to cover both standard and extended size boxes
         const header = await readRange(filePath, offset, 16);
         if (header.length < 8) return null;
         const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
@@ -211,14 +215,16 @@ async function loadVideo(filePath) {
         const stats = await fs.stat(filePath);
 
         if (stats.size > MAX_VIDEO_SIZE) {
-            console.log(`Video extraction skipped for "${filePath}": ${(stats.size / 1024 / 1024).toFixed(1)} MB exceeds the ${MAX_VIDEO_SIZE / 1024 / 1024} MB limit`);
+            logger(`Video extraction skipped for "${filePath.split("\\").pop()}": ${(stats.size / 1024 / 1024).toFixed(1)} MB exceeds the ${MAX_VIDEO_SIZE / 1024 / 1024} MB limit`);
             return null;
         }
 
-        const head = await readRange(filePath, 0, Math.min(HEAD, stats.size));
+        // First only read the first 4 bytes to determine if it's a EBML Matroska
+        const magic = await readRange(filePath, 0, 4);
 
         let tags;
-        if (isMatroska(head)) {
+        if (isMatroska(magic)) {
+            const head = await readRange(filePath, 0, Math.min(HEAD, stats.size));
             tags = extractMatroskaMetadata(head);
         } else {
             const moovBox = await findTopLevelBox(filePath, stats.size, 'moov');
@@ -420,5 +426,6 @@ function extractMatroskaMetadata(bytes) {
 
 module.exports = {
     loadFile,
+    setLogger,
     VALID_FORMATS
 };

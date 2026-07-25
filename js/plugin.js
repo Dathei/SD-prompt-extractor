@@ -5,6 +5,9 @@ const metadataParser = require(path.join(__dirname, 'js', 'metadata_parser'));
 
 const POLL_INTERVAL = 2000;
 
+const MAX_LOG_LINES = 500;
+const logLines = [];
+
 let isInitialized = false;
 let isProcessing = false;
 let knownItems = new Map();
@@ -27,16 +30,21 @@ function saveSettings(s) {
 
 
 function writeLog(message) {
+	fileReader.setLogger(writeLog);
+	console.log(message);
+	logLines.push(message);
+	if (logLines.length > MAX_LOG_LINES) logLines.splice(0, logLines.length - MAX_LOG_LINES);
 	const logWindow = document.getElementById('logWindow');
 	if (!logWindow) return;
-	console.log(message);
-	logWindow.textContent += `${message}\n`;
+	logWindow.textContent = logLines.join('\n');
 	logWindow.scrollTop = logWindow.scrollHeight;
 }
 
 
 async function extractMetadata(items, overwrite = false, addLoraTags = true, stripVersion = true, isManual = false) {
 	const progressBar = document.getElementById('progressBar');
+	let numModified = 0;
+
 	if (isManual && progressBar) {
 		progressBar.style.display = 'block';
 		progressBar.max = items.length;
@@ -97,6 +105,7 @@ async function extractMetadata(items, overwrite = false, addLoraTags = true, str
 
 			if (modified) {
 				await item.save();
+				numModified += 1;
 				writeLog(`Extracted data for: ${item.name}`);
 			}
 
@@ -109,6 +118,7 @@ async function extractMetadata(items, overwrite = false, addLoraTags = true, str
 	if (isManual && progressBar) {
 		setTimeout(() => { progressBar.style.display = 'none'; }, 100);
 	}
+	return numModified;
 }
 
 eagle.onPluginCreate((plugin) => {
@@ -170,10 +180,10 @@ eagle.onPluginCreate((plugin) => {
 			const loraTags = chkLoras.checked;
 			const stripVersion = chkStripVersion.checked;
 
-			await extractMetadata(selectedItems, overwrite, loraTags, stripVersion, true);
+			const numModified = await extractMetadata(selectedItems, overwrite, loraTags, stripVersion, true);
 
 			if (selectedItems.length > 1) {
-				writeLog(`All ${selectedItems.length} selected files extracted`);
+				writeLog(`Batch complete: Extracted: ${numModified}, Skipped: ${selectedItems.length - numModified}`);
 			}
 
 			isProcessing = false;
@@ -235,7 +245,10 @@ eagle.onPluginCreate((plugin) => {
 
 				let fullItems = await eagle.item.getByIds(idsToProcess);
 
-				await extractMetadata(fullItems, settings.overwrite, settings.addLoraTags, settings.stripVersion, false);
+				const numModified = await extractMetadata(fullItems, settings.overwrite, settings.addLoraTags, settings.stripVersion, false);
+				if (idsToProcess.length > 1) {
+					writeLog(`Batch complete: Extracted: ${numModified}, Skipped: ${fullItems.length - numModified}`);
+				}
 			}
 		} catch (error) {
 			writeLog(`Polling error: ${error}`);
