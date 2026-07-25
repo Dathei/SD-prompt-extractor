@@ -9,6 +9,10 @@ function setLogger(fn) { logger = fn || (() => {}); }
 
 function safeParseJSON(str) {
     if (typeof str !== 'string') return str;
+
+    const trimmed = str.trim();
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null;
+
     try {
         return JSON.parse(str);
     } catch (e) {
