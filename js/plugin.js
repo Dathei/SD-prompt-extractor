@@ -138,6 +138,7 @@ eagle.onPluginCreate((plugin) => {
 		chkStripVersion.disabled = !settings.addLoraTags;
 	}
 	[chkOverwrite, chkLoras, chkStripVersion].forEach(el => {
+		if (!el) return;
 		el.addEventListener('change', () => {
 			settings = {
 				overwrite: chkOverwrite ? chkOverwrite.checked : false,

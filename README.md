@@ -22,8 +22,8 @@ you add new files to Eagle.
 
 * **Background Auto-Tagging:** Automatically detects newly imported images/videos in Eagle and applies the generation
 prompt to the "Annotation" field.
-* **LoRA Tagging:** Optionally extract LoRAs used in the generation and add them as Eagle Tags.
-* **Version Stripping:** Clean up your tag list by automatically stripping version numbers and epoch information from LoRAs
+* **LoRA Tagging:** Extract LoRAs used in the generation and add them as Eagle Tags.
+* **Version Stripping:** Optionally clean up your tag list by automatically stripping version numbers and epoch information from LoRAs
 (e.g., `My_Lora_v2` and `My_Lora_v3` both become `lora: My_Lora`).
 * **Manual Control UI:** Select any number of files inside Eagle and manually run the extractor. 
   * You can access the interface via the Eagle Plugin menu (Puzzle icon at the top > Service) or by simply pressing the P shortcut
