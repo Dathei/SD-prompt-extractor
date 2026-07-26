@@ -257,5 +257,12 @@ eagle.onPluginCreate((plugin) => {
 			isProcessing = false;
 		}
 	}, POLL_INTERVAL);
+
+	eagle.onLibraryChanged(() => {
+		isInitialized = false;
+		knownItems.clear();
+		pendingIds.clear();
+		writeLog(`Library switched. Re-initializing...`);
+	});
 });
 
