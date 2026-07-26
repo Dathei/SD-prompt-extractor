@@ -74,6 +74,11 @@ async function extractMetadata(items, overwrite = false, addLoraTags = true, str
 			}
 
 			const { annotation, tags, pluginTags } = metadataParser.getFormattedMetadata(rawMetadata, stripVersion);
+			if (!annotation && pluginTags.length === 0) {
+				writeLog(`Metadata found but not in a supported format: ${item.name}`);
+				if (isManual && progressBar) progressBar.value = i + 1;
+				continue;
+			}
 
 			let modified = false;
 

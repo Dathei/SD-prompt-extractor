@@ -88,7 +88,7 @@ function parseRaw(rawMetadata) {
 
 function getFormattedMetadata(rawMetadata, stripVersion = false) {
     const parsed = parseRaw(rawMetadata);
-    if (!parsed) return { annotation: "", tags: [] };
+    if (!parsed) return { annotation: "", tags: [], pluginTags: [] };
 
     let annotation = formatParameters(parsed);
     // Cleanup space after commas

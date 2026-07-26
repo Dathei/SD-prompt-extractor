@@ -242,11 +242,9 @@ async function loadVideo(filePath) {
         const potentialKeys = ['comment', 'prompt', 'workflow', 'description', '©cmt', '©des'];
         let commentStr = null;
 
-        for (const [key, value] of Object.entries(tags)) {
-            if (potentialKeys.some(k => key.toLowerCase().includes(k))) {
-                commentStr = value;
-                break;
-            }
+        for (const k of potentialKeys) {
+            const hit = Object.entries(tags).find(([key]) => key.toLowerCase().includes(k));
+            if (hit) { commentStr = hit[1]; break; }
         }
         if (!commentStr) return null;
 
