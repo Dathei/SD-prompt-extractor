@@ -2,7 +2,10 @@ const exifr = require('exifr');
 const fs = require('fs').promises;
 
 const VALID_FORMATS = ['.png', '.jpg', '.jpeg', '.mp4', '.mkv', '.webm', '.mov'];
+
+
 const MAX_VIDEO_SIZE = 500 * 1024 * 1024;
+const MAX_METADATA_READ = 16 * 1024 * 1024;
 
 let logger = () => {};
 function setLogger(fn) { logger = fn || (() => {}); }
@@ -171,10 +174,18 @@ function parsePngTextChunks(bytes) {
 }
 
 async function readRange(filePath, start, length) {
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(length)) return new Uint8Array(0);
+    if (start < 0 || length <= 0) return new Uint8Array(0);
+    if (length > MAX_METADATA_READ) return new Uint8Array(0);
+
     const handle = await fs.open(filePath, 'r');
     try {
-        const buf = Buffer.alloc(length);
-        const { bytesRead } = await handle.read(buf, 0, length, start);
+        const { size } = await handle.stat();
+        if (start >= size) return new Uint8Array(0);
+        const safeLength = Math.min(length, size - start);
+
+        const buf = Buffer.alloc(safeLength);
+        const { bytesRead } = await handle.read(buf, 0, safeLength, start);
         return new Uint8Array(buf.buffer, buf.byteOffset, bytesRead);
     } finally {
         await handle.close();
@@ -185,30 +196,43 @@ function isMatroska(bytes) {
     return bytes.length >=4 && bytes[0] === 0x1A && bytes[1] === 0x45 && bytes[2] === 0xDF && bytes[3] === 0xA3;
 }
 
-async function findTopLevelBox(filePath, fileSize, searchType) {
-    let offset = 0;
-    while (offset + 8 <= fileSize) {
-        // Read 16 bytes to cover both standard and extended size boxes
-        const header = await readRange(filePath, offset, 16);
-        if (header.length < 8) return null;
-        const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
+async function readBoxHeader(filePath, offset, end) {
+    if (offset + 8 > end) return null;
 
-        let size = view.getUint32(0, false);
-        let headerLen = 8;
-        const type = String.fromCharCode(header[4], header[5], header[6], header[7]);
+    // Read 16 bytes to cover both standard and extended size boxes
+    const header = await readRange(filePath, offset, Math.min(16, end - offset));
+    if (header.length < 8) return null;
+    const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
 
-        if (size === 1) {
-            // 64-bit extended size, common for large mdat
-            if (header.length < 16) return null;
-            size = Number(view.getBigUint64(8, false));
-            headerLen = 16;
-        } else if (size === 0) {
-            size = fileSize - offset;  // box extends to EOF
-        }
+    let size = view.getUint32(0, false);
+    let headerLen = 8;
+    const type = String.fromCharCode(header[4], header[5], header[6], header[7]);
 
-        if (size < headerLen) return null;
-        if (type === searchType) return { offset, size };
-        offset += size;
+    if (size === 1) {
+        // 64-bit extended size, common for large mdat
+        if (header.length < 16) return null;
+        size = Number(view.getBigUint64(8, false));
+        headerLen = 16;
+    } else if (size === 0) {
+        size = end - offset;  // box extends to the end of its parent
+    }
+
+    // Validate size after real size is known
+    if (!Number.isSafeInteger(size)) return null;
+    if (size < headerLen) return null;
+    if (size > end - offset) return null;
+
+    return { offset, size, headerLen, type };
+}
+
+// Walks boxes between [start, end) reading only headers, never box payloads
+async function findBoxOnDisk(filePath, start, end, searchType) {
+    let offset = start;
+    while (offset + 8 <= end) {
+        const box = await readBoxHeader(filePath, offset, end);
+        if (!box) return null;
+        if (box.type === searchType) return box;
+        offset += box.size;  // size >= headerLen >= 8, so this always advances
     }
     return null;
 }
@@ -231,10 +255,28 @@ async function loadVideo(filePath) {
             const head = await readRange(filePath, 0, Math.min(HEAD, stats.size));
             tags = extractMatroskaMetadata(head);
         } else {
-            const moovBox = await findTopLevelBox(filePath, stats.size, 'moov');
-            if (!moovBox) return null;
-            const moovBytes = await readRange(filePath, moovBox.offset, moovBox.size);
-            tags = parseMp4Metadata(moovBytes);
+            const moov = await findBoxOnDisk(filePath, 0, stats.size, 'moov');
+            if (!moov) return null;
+
+            if (moov.size <= MAX_METADATA_READ) {
+                const moovBytes = await readRange(filePath, moov.offset, moov.size);
+                tags = parseMp4Metadata(moovBytes, { moovStart: moov.headerLen });
+            } else {
+                // moov is too large to buffer. Walk it on disk and read only udta,
+                // which is where the generation metadata lives.
+                const udta = await findBoxOnDisk(
+                    filePath,
+                    moov.offset + moov.headerLen,
+                    moov.offset + moov.size,
+                    'udta'
+                );
+                if (!udta || udta.size > MAX_METADATA_READ) {
+                    logger(`Video extraction skipped for "${filePath.split("\\").pop()}": metadata exceeds the ${MAX_METADATA_READ / 1024 / 1024} MB read limit`);
+                    return null;
+                }
+                const udtaBytes = await readRange(filePath, udta.offset, udta.size);
+                tags = parseMp4Metadata(udtaBytes, { udtaStart: udta.headerLen });
+            }
         }
 
         if (!tags || Object.keys(tags).length === 0) return null;
@@ -292,7 +334,7 @@ function trimToBalancedJson(s) {
     return s;
 }
 
-function parseMp4Metadata(bytes) {
+function parseMp4Metadata(bytes, options = {}) {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const decoder = new TextDecoder('utf-8');
     const readU32 = (o) => view.getUint32(o, false);
@@ -300,12 +342,15 @@ function parseMp4Metadata(bytes) {
     const result = {};
 
     function findBox(boxType, start, end) {
+        const limit = Math.min(end, bytes.length);
         let offset = start;
-        while (offset + 8 <= end) {
-            const size = readU32(offset);
+        while (offset + 8 <= limit) {
+            let size = readU32(offset);
             const type = readType(offset + 4);
+            if (size === 0) size = limit - offset;  // box extends to parent end
+            // Validate before trusting the box
+            if (size < 8 || offset + size > limit) break;
             if (type === boxType) return { start: offset + 8, end: offset + size };
-            if (size < 8 || offset + size > end) break;
             offset += size;
         }
         return null;
@@ -313,20 +358,30 @@ function parseMp4Metadata(bytes) {
 
     function listBoxes(start, end) {
         const boxes = [];
+        const limit = Math.min(end, bytes.length);
         let offset = start;
-        while (offset + 8 <= end) {
+        while (offset + 8 <= limit) {
             const size = readU32(offset);
             const type = readType(offset + 4);
-            if (size < 8 || offset + size > end) break;
+            if (size < 8 || offset + size > limit) break;
             boxes.push({ type, typeOffset: offset + 4, start: offset + 8, end: offset + size });
             offset += size;
         }
         return boxes;
     }
 
-    const moov = findBox('moov', 0, bytes.length);
-    if (!moov) return result;
-    const udta = findBox('udta', moov.start, moov.end);
+    let udta;
+    if (Number.isSafeInteger(options.udtaStart)) {
+        // Buffer is a bare udta box (moov was too large to load)
+        udta = { start: options.udtaStart, end: bytes.length };
+    } else {
+        // Buffer is a moov box, its offsets were already validated on disk
+        const moov = Number.isSafeInteger(options.moovStart)
+            ? { start: options.moovStart, end: bytes.length }
+            : findBox('moov', 0, bytes.length);
+        if (!moov) return result;
+        udta = findBox('udta', moov.start, moov.end);
+    }
     if (!udta) return result;
 
     const meta = findBox('meta', udta.start, udta.end);

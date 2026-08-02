@@ -3,7 +3,7 @@
     "version": "1.0.2",
     "platform": "all",
     "arch": "all",
-    "name": "Stable Diffusion Prompt Extractor",
+    "name": "SD Prompt Extractor",
     "logo": "/assets/logo.png",
     "keywords": ["Stable Diffusion", "ComfyUI", "A1111", "AI"],
     "devTools": false,
