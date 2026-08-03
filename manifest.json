@@ -3,10 +3,12 @@
     "version": "1.0.2",
     "platform": "all",
     "arch": "all",
-    "name": "SD Prompt Extractor",
+    "name": "{{manifest.app.name}}",
     "logo": "/assets/logo.png",
     "keywords": ["Stable Diffusion", "ComfyUI", "A1111", "AI"],
     "devTools": false,
+    "fallbackLanguage": "en",
+    "languages": ["en", "zh_CN", "de_DE"],
     "main": {
         "serviceMode": true,
         "url": "index.html",

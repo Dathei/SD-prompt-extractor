@@ -67,37 +67,44 @@
             overflow-wrap: anywhere;
             margin: 0;
         }
+
+        #selected {
+            font-weight: bold;
+        }
     </style>
 </head>
 
 <body>
 <div class="container">
-    <div id="selected"><b>You have not selected any files.</b></div>
+    <div id="selected" data-i18n="ui.selectedNone">You have not selected any files</div>
 
     <div class="form-group">
         <label>
-            <input type="checkbox" id="chkOverwrite"> Overwrite existing annotation and LoRa tags
+            <input type="checkbox" id="chkOverwrite">
+            <span data-i18n="ui.overwrite">Overwrite existing annotations</span>
         </label>
     </div>
     <div class="form-group">
         <label>
-            <input type="checkbox" id="chkLoras"> Add LoRas as tags
+            <input type="checkbox" id="chkLoras">
+            <span data-i18n="ui.addLoras">Add LoRas as tags</span>
         </label>
     </div>
     <div class="form-group">
         <label>
-            <input type="checkbox" id="chkStripVersion" disabled> Remove version information from LoRa tags
+            <input type="checkbox" id="chkStripVersion" disabled>
+            <span data-i18n="ui.stripVersion">Remove version information from LoRa tags</span>
         </label>
     </div>
 
     <div>
-        <button type="button" id="extractBtn" disabled>Extract selected</button>
+        <button type="button" id="extractBtn" data-i18n="ui.extractButton" disabled>Extract selected</button>
     </div>
 
     <progress id="progressBar" value="0" max="100"></progress>
 
     <div class="log-section">
-        Logs:
+        <span data-i18n="ui.logs">Logs:</span>
         <div class="logs" id="logWindow"></div>
     </div>
 </div>

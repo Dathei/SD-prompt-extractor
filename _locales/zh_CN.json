@@ -1,0 +1,31 @@
+{
+  "manifest": {
+    "app": {
+      "name": "SD 提示词提取器"
+    }
+  },
+  "ui": {
+    "selectedCount": "已选文件数量：{{count}}",
+    "selectedNone": "未选择任何文件",
+    "overwrite": "覆盖已有注释",
+    "addLoras": "添加 LoRA 标签",
+    "stripVersion": "清理 LoRA 标签中的版本信息",
+    "extractButton": "提取选中项",
+    "logs": "日志："
+  },
+  "logWindow": {
+    "initialized_other": "插件已初始化。正在跟踪 {{count}} 个项目",
+    "noMetadata": "未找到元数据：{{name}}",
+    "unsupportedFormat": "找到元数据但格式不受支持：{{name}}",
+    "successfulExtraction": "已提取数据：{{name}}",
+    "failedExtraction": "提取失败：{{name}}: {{error}}",
+    "batchExtraction": "批处理完成：已提取 {{successCount}}，跳过 {{skippedCount}}",
+    "processingAutoExtract_other": "正在批处理 {{count}} 个项目…",
+    "pollingError": "轮询错误：{{error}}",
+    "librarySwitch": "资源库已切换。正在重新初始化…",
+    "fileReader": {
+      "sizeLimit": "已跳过 {{name}} 的提取：{{size}} MB 超过 {{limit}} MB 限制",
+      "metadataLimit": "跳过视频提取 {{name}}：元数据超过 {{limit}} MB 限制"
+    }
+  }
+}

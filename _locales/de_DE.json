@@ -1,0 +1,33 @@
+{
+  "manifest": {
+    "app": {
+      "name": "SD Prompt Extractor"
+    }
+  },
+  "ui": {
+    "selectedCount": "Anzahl ausgewählter Dateien: {{count}}",
+    "selectedNone": "Keine Dateien ausgewählt",
+    "overwrite": "Überschreibe vorhandene Annotationen",
+    "addLoras": "Füge LoRAs als Tags hinzu",
+    "stripVersion": "Entferne Versionsinformationen aus LoRA-Tags",
+    "extractButton": "Auswahl extrahieren",
+    "logs": "Logs:"
+  },
+  "logWindow": {
+    "initialized_one": "Plugin initialisiert. Tracke {{count}} Element",
+    "initialized_other": "Plugin initialisiert. Tracke {{count}} Elemente",
+    "noMetadata": "Keine Metadaten gefunden für: {{name}}",
+    "unsupportedFormat": "Metadaten gefunden, aber nicht in einem unterstützten Format für: {{name}}",
+    "successfulExtraction":"Daten extrahiert für: {{name}}",
+    "failedExtraction": "Extraktion fehlgeschlagen für: {{name}}: {{error}}",
+    "batchExtraction": "Batch abgeschlossen: Extrahiert: {{successCount}}, Übersprungen: {{skippedCount}}",
+    "processingAutoExtract_one": "{{count}} Element wird verarbeitet...",
+    "processingAutoExtract_other": "Batch mit {{count}} Elementen wird verarbeitet...",
+    "pollingError": "Polling-Fehler: {{error}}",
+    "librarySwitch": "Bibliothek gewechselt. Wird neu initialisiert...",
+    "fileReader": {
+      "sizeLimit": "Extraktion für {{name}} übersprungen: {{size}} MB überschreitet das Limit von {{limit}} MB",
+      "metadataLimit": "Videoextraktion für {{name}} übersprungen: Metadatengröße überschreitet das Limit von {{limit}} MB"
+    }
+  }
+}

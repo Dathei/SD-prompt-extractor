@@ -131,7 +131,10 @@ async function loadFile(filePath) {
     }
 
     if (stats.size > MAX_FILE_SIZE) {
-        logger(`Extraction skipped for "${filePath.split("\\").pop()}": ${(stats.size / 1024 / 1024).toFixed(1)} MB exceeds the ${MAX_FILE_SIZE / 1024 / 1024} MB limit`);
+        logger('logWindow.fileReader.sizeLimit', {
+            name: filePath.split('\\').pop(),
+            size: (stats.size / 1024 / 1024).toFixed(1),
+            limit: (MAX_FILE_SIZE / 1024 / 1024).toFixed(1) });
         return null;
     }
 
@@ -331,7 +334,9 @@ async function loadVideo(filePath, fileSize) {
                     'udta'
                 );
                 if (!udta || udta.size > MAX_METADATA_READ) {
-                    logger(`Video extraction skipped for "${filePath.split("\\").pop()}": metadata exceeds the ${MAX_METADATA_READ / 1024 / 1024} MB read limit`);
+                    logger('logWindow.fileReader.metadataLimit', {
+                        name: filePath.split('\\').pop(),
+                        limit: (MAX_METADATA_READ / 1024 / 1024).toFixed(1) });
                     return null;
                 }
                 const udtaBytes = await readRange(filePath, udta.offset, udta.size);

@@ -14,6 +14,7 @@ let knownItems = new Map();
 
 const SETTINGS_KEY = 'sd-prompt-extractor.settings';
 
+const t = (key, params) => i18next.t(key, { ...params, interpolation: { escapeValue: false } });
 
 function loadSettings() {
 	try {
@@ -28,9 +29,16 @@ function saveSettings(s) {
 	try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch (e) {}
 }
 
+function applyTranslations(root = document) {
+	root.querySelectorAll('[data-i18n]').forEach(el => {
+		el.textContent = i18next.t(el.dataset.i18n);
+	});
+	root.querySelectorAll('[data-i18n-title]').forEach(el => {
+		el.title = i18next.t(el.dataset.i18nTitle);
+	});
+}
 
 function writeLog(message) {
-	fileReader.setLogger(writeLog);
 	console.log(message);
 	logLines.push(message);
 	if (logLines.length > MAX_LOG_LINES) logLines.splice(0, logLines.length - MAX_LOG_LINES);
@@ -68,14 +76,14 @@ async function extractMetadata(items, overwrite = false, addLoraTags = true, str
 			const rawMetadata = await fileReader.loadFile(filePath);
 
 			if (!rawMetadata) {
-				writeLog(`No metadata found for: ${item.name}`);
+				writeLog(t('logWindow.noMetadata', { name: item.name }));
 				if (isManual && progressBar) progressBar.value = i + 1;
 				continue;
 			}
 
 			const { annotation, tags, pluginTags } = metadataParser.getFormattedMetadata(rawMetadata, stripVersion);
 			if (!annotation && pluginTags.length === 0) {
-				writeLog(`Metadata found but not in a supported format: ${item.name}`);
+				writeLog(t('logWindow.unsupportedFormat', { name: item.name }));
 				if (isManual && progressBar) progressBar.value = i + 1;
 				continue;
 			}
@@ -111,11 +119,11 @@ async function extractMetadata(items, overwrite = false, addLoraTags = true, str
 			if (modified) {
 				await item.save();
 				numModified += 1;
-				writeLog(`Extracted data for: ${item.name}`);
+				writeLog(t('logWindow.successfulExtraction', { name: item.name }));
 			}
 
 		} catch (error) {
-			writeLog(`Extraction failed for: ${item.name}: ${error}`);
+			writeLog(t('logWindow.failedExtraction', { name: item.name, error: error.message }));
 		}
 		if (isManual && progressBar) progressBar.value = i + 1;
 	}
@@ -135,6 +143,8 @@ eagle.onPluginCreate((plugin) => {
 
 	let selectedItems = [];
 
+	fileReader.setLogger((key, params) => writeLog(i18next.t(key, params)));
+	applyTranslations();
 	let settings = loadSettings();
 	if (chkOverwrite) chkOverwrite.checked = settings.overwrite;
 	if (chkLoras) chkLoras.checked = settings.addLoraTags;
@@ -165,10 +175,10 @@ eagle.onPluginCreate((plugin) => {
 		if (statusDiv) {
 			selectedItems = await eagle.item.getSelected();
 			if (selectedItems.length > 0) {
-				statusDiv.innerHTML = `<b>Number of selected files: ${selectedItems.length}</b>`
+				statusDiv.textContent = i18next.t('ui.selectedCount', { count: selectedItems.length });
 				if (extractBtn) extractBtn.disabled = false;
 			} else {
-				statusDiv.innerHTML = `<b>You have not selected any files.</b>`
+				statusDiv.textContent = i18next.t('ui.selectedNone');
 				if (extractBtn) extractBtn.disabled = true;
 			}
 
@@ -189,7 +199,8 @@ eagle.onPluginCreate((plugin) => {
 			const numModified = await extractMetadata(selectedItems, overwrite, loraTags, stripVersion, true);
 
 			if (selectedItems.length > 1) {
-				writeLog(`Batch complete: Extracted: ${numModified}, Skipped: ${selectedItems.length - numModified}`);
+				writeLog(t('logWindow.batchExtraction',
+					{ successCount: numModified, skippedCount: selectedItems.length - numModified }));
 			}
 
 			isProcessing = false;
@@ -212,7 +223,9 @@ eagle.onPluginCreate((plugin) => {
 					knownItems.set(file.id, file.modifiedAt || 0)
 				});
 				isInitialized = true;
-				writeLog(`Plugin initialized. Tracking ${knownItems.size} items.`);
+				writeLog(t('logWindow.initialized', {
+					count: knownItems.size
+				}));
 				isProcessing = false;
 				return;
 			}
@@ -247,17 +260,20 @@ eagle.onPluginCreate((plugin) => {
 				let idsToProcess = Array.from(pendingIds);
 				pendingIds.clear();
 
-				writeLog(`Processing batch of ${idsToProcess.length} item(s)...`);
+				writeLog(t('logWindow.processingAutoExtract', { count: idsToProcess.length }));
 
 				let fullItems = await eagle.item.getByIds(idsToProcess);
 
 				const numModified = await extractMetadata(fullItems, settings.overwrite, settings.addLoraTags, settings.stripVersion, false);
 				if (idsToProcess.length > 1) {
-					writeLog(`Batch complete: Extracted: ${numModified}, Skipped: ${fullItems.length - numModified}`);
+					writeLog(t('logWindow.batchExtraction', {
+						successCount: numModified,
+						skippedCount: fullItems.length - numModified
+					}));
 				}
 			}
 		} catch (error) {
-			writeLog(`Polling error: ${error}`);
+			writeLog(t('logWindow.pollingError', { error: error.message }));
 		} finally {
 			isProcessing = false;
 		}
@@ -267,7 +283,7 @@ eagle.onPluginCreate((plugin) => {
 		isInitialized = false;
 		knownItems.clear();
 		pendingIds.clear();
-		writeLog(`Library switched. Re-initializing...`);
+		writeLog(t('logWindow.librarySwitch'));
 	});
 });
 
