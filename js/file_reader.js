@@ -270,6 +270,39 @@ async function findBoxOnDisk(filePath, start, end, searchType) {
     }
 }
 
+function findVideoKey(tags) {
+    const potentialKeys = ['prompt', 'comment', 'workflow', 'description', '©cmt', '©des'];
+
+    const looksUsable = (obj) =>
+        obj && typeof obj === 'object' && (
+            obj.parameters ||
+            obj.prompt ||
+            Array.isArray(obj.nodes) ||
+            Object.values(obj).some(v => v && typeof v === 'object' && 'class_type' in v)
+        );
+    for (const k of potentialKeys) {
+        const hit = Object.entries(tags).find(([key]) => key.toLowerCase().includes(k));
+        if (!hit) continue;
+        const parsed = tryParse(hit[1]);
+        if (looksUsable(parsed)) return parsed;
+    }
+    return null;
+}
+
+function tryParse(raw) {
+    try {
+        if (raw.startsWith('{\\"')) {
+            raw = raw.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+            // Matroska stores ComfyUI prompts as escaped strings, unescape if needed
+            raw = trimToBalancedJson(raw);
+        }
+        return JSON.parse(raw);
+    } catch (e) {
+        console.error('JSON parse failed:', e.message);
+        return null;
+    }
+}
+
 async function loadVideo(filePath, fileSize) {
     try {
         const HEAD = 4 * 1024 * 1024;
@@ -308,27 +341,7 @@ async function loadVideo(filePath, fileSize) {
 
         if (!tags || Object.keys(tags).length === 0) return null;
 
-        const potentialKeys = ['comment', 'prompt', 'workflow', 'description', '©cmt', '©des'];
-        let commentStr = null;
-
-        for (const k of potentialKeys) {
-            const hit = Object.entries(tags).find(([key]) => key.toLowerCase().includes(k));
-            if (hit) { commentStr = hit[1]; break; }
-        }
-        if (!commentStr) return null;
-
-        try {
-            let str = commentStr;
-            if (str.startsWith('{\\"')) {
-                str = str.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-                // Matroska stores ComfyUI prompts as escaped strings, unescape if needed
-                str = trimToBalancedJson(str);
-            }
-            return JSON.parse(str);
-        } catch (e) {
-            console.error('JSON parse failed:', e.message);
-            return { parameters: commentStr };
-        }
+        return findVideoKey(tags);
     } catch (error) {
         console.error("Video extraction failed:", error);
         return null;
