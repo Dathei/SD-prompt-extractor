@@ -3,9 +3,10 @@ const fs = require('fs').promises;
 
 const VALID_FORMATS = ['.png', '.jpg', '.jpeg', '.mp4', '.mkv', '.webm', '.mov'];
 
-
-const MAX_VIDEO_SIZE = 500 * 1024 * 1024;
+const MAX_FILE_SIZE = 500 * 1024 * 1024;
 const MAX_METADATA_READ = 16 * 1024 * 1024;
+
+const MAX_BOX_SCAN = 4096;
 
 let logger = () => {};
 function setLogger(fn) { logger = fn || (() => {}); }
@@ -37,16 +38,17 @@ function safeParseJSON(str) {
     }
 }
 
-async function loadImage(filePath) {
+async function loadImage(filePath, fileSize) {
     try {
         let metadata = await exifr.parse(filePath, true);
 
         if (filePath.toLowerCase().endsWith('.png')) {
-            // Text-chunk fallback if exifr failed to find parameters/prompt
+            // Text-chunk fallback if exifr failed to find parameters/prompt.
+            // Generation chunks precede IDAT, so a bounded head read is enough
+            // and keeps the allocation off the file's own size.
             if (!metadata || (!metadata.parameters && !metadata.prompt)) {
-                const buffer = await fs.readFile(filePath);
-                const bytes = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-                const chunks = parsePngTextChunks(bytes);
+                const bytes = await readRange(filePath, 0, Math.min(fileSize, MAX_METADATA_READ));
+                const chunks = bytes.length ? parsePngTextChunks(bytes) : null;
                 if (chunks?.parameters && !chunks?.prompt) {
                     return { parameters: chunks.parameters };
                 }
@@ -120,12 +122,25 @@ async function loadFile(filePath) {
         return null;
     }
 
+    let stats;
+    try {
+        stats = await fs.stat(filePath);
+    } catch (error) {
+        console.error("Could not stat file:", error);
+        return null;
+    }
+
+    if (stats.size > MAX_FILE_SIZE) {
+        logger(`Extraction skipped for "${filePath.split("\\").pop()}": ${(stats.size / 1024 / 1024).toFixed(1)} MB exceeds the ${MAX_FILE_SIZE / 1024 / 1024} MB limit`);
+        return null;
+    }
+
     const isImage = ['.jpg', '.jpeg', '.png'].some(format => ext.endsWith(format));
 
     if (isImage) {
-        return await loadImage(filePath);
+        return await loadImage(filePath, stats.size);
     } else {
-        return await loadVideo(filePath);
+        return await loadVideo(filePath, stats.size);
     }
 }
 
@@ -173,20 +188,29 @@ function parsePngTextChunks(bytes) {
     return result;
 }
 
-async function readRange(filePath, start, length) {
-    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(length)) return new Uint8Array(0);
-    if (start < 0 || length <= 0) return new Uint8Array(0);
-    if (length > MAX_METADATA_READ) return new Uint8Array(0);
+// Shared validation for every read
+function validateRange(fileSize, start, length) {
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(length)) return 0;
+    if (start < 0 || length <= 0) return 0;
+    if (length > MAX_METADATA_READ) return 0;
+    if (start >= fileSize) return 0;
+    return Math.min(length, fileSize - start);
+}
 
+async function readFromHandle(handle, fileSize, start, length) {
+    const safeLength = validateRange(fileSize, start, length);
+    if (safeLength === 0) return new Uint8Array(0);
+
+    const buf = Buffer.alloc(safeLength);
+    const { bytesRead } = await handle.read(buf, 0, safeLength, start);
+    return new Uint8Array(buf.buffer, buf.byteOffset, bytesRead);
+}
+
+async function readRange(filePath, start, length) {
     const handle = await fs.open(filePath, 'r');
     try {
         const { size } = await handle.stat();
-        if (start >= size) return new Uint8Array(0);
-        const safeLength = Math.min(length, size - start);
-
-        const buf = Buffer.alloc(safeLength);
-        const { bytesRead } = await handle.read(buf, 0, safeLength, start);
-        return new Uint8Array(buf.buffer, buf.byteOffset, bytesRead);
+        return await readFromHandle(handle, size, start, length);
     } finally {
         await handle.close();
     }
@@ -196,11 +220,11 @@ function isMatroska(bytes) {
     return bytes.length >=4 && bytes[0] === 0x1A && bytes[1] === 0x45 && bytes[2] === 0xDF && bytes[3] === 0xA3;
 }
 
-async function readBoxHeader(filePath, offset, end) {
+async function readBoxHeader(handle, fileSize, offset, end) {
     if (offset + 8 > end) return null;
 
     // Read 16 bytes to cover both standard and extended size boxes
-    const header = await readRange(filePath, offset, Math.min(16, end - offset));
+    const header = await readFromHandle(handle, fileSize, offset, Math.min(16, end - offset));
     if (header.length < 8) return null;
     const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
 
@@ -226,36 +250,39 @@ async function readBoxHeader(filePath, offset, end) {
 }
 
 // Walks boxes between [start, end) reading only headers, never box payloads
+// One open handle for the whole walk, so a long scan costs reads, not opens.
 async function findBoxOnDisk(filePath, start, end, searchType) {
-    let offset = start;
-    while (offset + 8 <= end) {
-        const box = await readBoxHeader(filePath, offset, end);
-        if (!box) return null;
-        if (box.type === searchType) return box;
-        offset += box.size;  // size >= headerLen >= 8, so this always advances
+    const handle = await fs.open(filePath, 'r');
+    try {
+        const { size: fileSize } = await handle.stat();
+        let offset = start;
+        let visited = 0;
+        while (offset + 8 <= end) {
+            if (++visited > MAX_BOX_SCAN) return null;
+            const box = await readBoxHeader(handle, fileSize, offset, end);
+            if (!box) return null;
+            if (box.type === searchType) return box;
+            offset += box.size;  // size >= headerLen >= 8, so this always advances
+        }
+        return null;
+    } finally {
+        await handle.close();
     }
-    return null;
 }
 
-async function loadVideo(filePath) {
+async function loadVideo(filePath, fileSize) {
     try {
         const HEAD = 4 * 1024 * 1024;
-        const stats = await fs.stat(filePath);
-
-        if (stats.size > MAX_VIDEO_SIZE) {
-            logger(`Video extraction skipped for "${filePath.split("\\").pop()}": ${(stats.size / 1024 / 1024).toFixed(1)} MB exceeds the ${MAX_VIDEO_SIZE / 1024 / 1024} MB limit`);
-            return null;
-        }
 
         // First only read the first 4 bytes to determine if it's a EBML Matroska
         const magic = await readRange(filePath, 0, 4);
 
         let tags;
         if (isMatroska(magic)) {
-            const head = await readRange(filePath, 0, Math.min(HEAD, stats.size));
+            const head = await readRange(filePath, 0, Math.min(HEAD, fileSize));
             tags = extractMatroskaMetadata(head);
         } else {
-            const moov = await findBoxOnDisk(filePath, 0, stats.size, 'moov');
+            const moov = await findBoxOnDisk(filePath, 0, fileSize, 'moov');
             if (!moov) return null;
 
             if (moov.size <= MAX_METADATA_READ) {

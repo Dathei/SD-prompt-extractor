@@ -71,6 +71,29 @@ function write(name, buf) {
     return p;
 }
 
+// Writes only the given pieces at the given offsets and leaves the gaps as a
+// hole. Lets a fixture declare a 20 MB box without writing 20 MB, since the
+// parser only ever reads headers in those regions.
+function writeSparse(name, totalSize, pieces) {
+    const p = path.join(tmpDir, name);
+    const fd = fs.openSync(p, 'w');
+    try {
+        for (const { at, buf } of pieces) fs.writeSync(fd, buf, 0, buf.length, at);
+        fs.ftruncateSync(fd, totalSize);
+    } finally {
+        fs.closeSync(fd);
+    }
+    return p;
+}
+
+// Header of a box whose payload is left unwritten.
+function boxHeader(type, declaredSize) {
+    const head = Buffer.alloc(8);
+    head.writeUInt32BE(declaredSize, 0);
+    head.write(type, 4, 'ascii');
+    return head;
+}
+
 // --- tests ----------------------------------------------------------------
 
 describe('MP4 box size validation', () => {
@@ -129,12 +152,84 @@ describe('MP4 box size validation', () => {
     });
 });
 
+describe('file size gate', () => {
+    it('skips any supported format above the 500 MB limit', async () => {
+        for (const name of ['huge.mp4', 'huge.png']) {
+            const p = path.join(tmpDir, name);
+            fs.writeFileSync(p, Buffer.alloc(0));
+            fs.truncateSync(p, 501 * 1024 * 1024);   // sparse, no real disk use
+            await expect(loadFile(p)).resolves.toBeNull();
+        }
+    });
+});
+
+describe('box scan limit', () => {
+    const pad = (n) => Array.from({ length: n }, () => box('free', Buffer.alloc(0)));
+
+    it('stops scanning before reaching a moov placed past the limit', async () => {
+        const file = write('scanlimit.mp4', Buffer.concat([
+            ...pad(5000), box('moov', udtaWith(PROMPT)),
+        ]));
+        await expect(loadFile(file)).resolves.toBeNull();
+    });
+
+    it('still finds a moov that sits after a modest run of boxes', async () => {
+        const file = write('scanok.mp4', Buffer.concat([
+            ...pad(100), box('moov', udtaWith(PROMPT)),
+        ]));
+        await expect(loadFile(file)).resolves.toMatchObject({ prompt: expect.anything() });
+    });
+});
+
+describe('PNG text chunk fallback', () => {
+    it('does not allocate the whole file when the PNG exceeds the read limit', async () => {
+        const chunk = (type, payload) => Buffer.concat([
+            (() => { const b = Buffer.alloc(4); b.writeUInt32BE(payload.length, 0); return b; })(),
+            Buffer.from(type, 'ascii'),
+            payload,
+            Buffer.alloc(4),                      // CRC placeholder, not verified
+        ]);
+        const ihdr = Buffer.alloc(13);
+        ihdr.writeUInt32BE(64, 0); ihdr.writeUInt32BE(64, 4);
+        ihdr[8] = 8; ihdr[9] = 6;
+
+        const IDAT = 24 * 1024 * 1024;
+        const head = Buffer.concat([
+            Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+            chunk('IHDR', ihdr),
+            chunk('tEXt', Buffer.from(`parameters\0${PROMPT}`, 'latin1')),
+            (() => { const b = Buffer.alloc(8); b.writeUInt32BE(IDAT, 0); b.write('IDAT', 4, 'ascii'); return b; })(),
+        ]);
+        const tail = Buffer.concat([Buffer.alloc(4), chunk('IEND', Buffer.alloc(0))]);
+        const file = writeSparse('big.png', head.length + IDAT + tail.length, [
+            { at: 0, buf: head },
+            { at: head.length + IDAT, buf: tail },
+        ]);
+
+        const alloc = vi.spyOn(Buffer, 'alloc');
+        await loadFile(file);
+        for (const call of alloc.mock.calls) {
+            expect(call[0]).toBeLessThanOrEqual(16 * 1024 * 1024);
+        }
+        alloc.mockRestore();
+    });
+});
+
 describe('metadata read limit', () => {
     it('reads only udta when moov exceeds the read limit, never allocating above it', async () => {
-        const filler = box('free', Buffer.alloc(20 * 1024 * 1024));
-        const file = write('bigmoov.mp4', Buffer.concat([
-            FTYP, box('moov', Buffer.concat([filler, udtaWith(PROMPT)])),
-        ]));
+        const FILLER = 20 * 1024 * 1024;
+        const udta = udtaWith(PROMPT);
+        const moovStart = FTYP.length;
+        const freeStart = moovStart + 8;
+        const udtaStart = freeStart + FILLER;
+        const total = udtaStart + udta.length;
+
+        const file = writeSparse('bigmoov.mp4', total, [
+            { at: 0, buf: FTYP },
+            { at: moovStart, buf: boxHeader('moov', total - moovStart) },
+            { at: freeStart, buf: boxHeader('free', FILLER) },
+            { at: udtaStart, buf: udta },
+        ]);
 
         const alloc = vi.spyOn(Buffer, 'alloc');
         await expect(loadFile(file)).resolves.toMatchObject({ prompt: expect.anything() });
@@ -145,10 +240,16 @@ describe('metadata read limit', () => {
     });
 
     it('gives up when udta itself exceeds the read limit', async () => {
-        const bigUdta = box('udta', Buffer.alloc(20 * 1024 * 1024));
-        const file = write('bigudta.mp4', Buffer.concat([
-            FTYP, box('moov', Buffer.concat([bigUdta, box('free', Buffer.alloc(1024))])),
-        ]));
+        const UDTA = 20 * 1024 * 1024;
+        const moovStart = FTYP.length;
+        const udtaStart = moovStart + 8;
+        const total = udtaStart + UDTA;
+
+        const file = writeSparse('bigudta.mp4', total, [
+            { at: 0, buf: FTYP },
+            { at: moovStart, buf: boxHeader('moov', total - moovStart) },
+            { at: udtaStart, buf: boxHeader('udta', UDTA) },
+        ]);
         await expect(loadFile(file)).resolves.toBeNull();
     });
 });
