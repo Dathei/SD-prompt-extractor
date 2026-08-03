@@ -14,12 +14,14 @@
     "logs": "日志："
   },
   "logWindow": {
+    "initialized_one": "插件已初始化。正在跟踪 {{count}} 个项目",
     "initialized_other": "插件已初始化。正在跟踪 {{count}} 个项目",
     "noMetadata": "未找到元数据：{{name}}",
     "unsupportedFormat": "找到元数据但格式不受支持：{{name}}",
     "successfulExtraction": "已提取数据：{{name}}",
     "failedExtraction": "提取失败：{{name}}: {{error}}",
     "batchExtraction": "批处理完成：已提取 {{successCount}}，跳过 {{skippedCount}}",
+    "processingAutoExtract_one": "正在处理 {{count}} 个项目…",
     "processingAutoExtract_other": "正在批处理 {{count}} 个项目…",
     "pollingError": "轮询错误：{{error}}",
     "librarySwitch": "资源库已切换。正在重新初始化…",
