@@ -272,6 +272,74 @@ function extractComfyPrompt(nodeData) {
     return extracted;
 }
 
+function loraBaseName(path) {
+    return path.split(/[\\/]/).pop().split('.')[0]
+}
+
+function extractLoras(inputs) {
+    const found = [];
+    const add = (name, strength) => {
+        if (typeof name !== 'string' || !name.trim() || name === 'None') return;
+        const s = parseFloat(strength);
+        if (s === 0) return;
+        found.push([loraBaseName(name), isNaN(s) ? 1.0 : s])
+    };
+
+    // LoraLoader
+    if (typeof inputs.lora_name === 'string') {
+        add(inputs.lora_name, inputs.strength_model);
+    }
+
+    // Power Lora Loader
+    for (const [k, v] of Object.entries(inputs)) {
+        if (/^lora_\d+$/.test(k) && v && typeof v === 'object' && !Array.isArray(v) && v.on) {
+            add(v.lora, v.strength);
+        }
+    }
+
+    // Lora Stacker
+    if ('lora_name_1' in inputs) {
+        const loraCount = inputs.lora_count || 0;
+        const weightKey = inputs.input_mode === 'advanced' ? 'model_str_' : 'lora_wt_';
+        for (let i = 0; i <= loraCount; i++) {
+            add(inputs[`lora_name_${i}`], inputs[weightKey + i]);
+        }
+    }
+
+    // Lora Loader
+    const loraList = inputs.loras?.__value__;
+    if (Array.isArray(loraList)) {
+        for (const lora of loraList) {
+            if (lora && lora.active) {
+                add(lora.name, lora.strength);
+            }
+        }
+    }
+
+    return found;
+}
+
+function traceLoras(link, nodes, out = {}, visited = new Set()) {
+    if (!Array.isArray(link) || link.length < 1) return out;
+    const nodeId = link[0].toString();
+    if (visited.has(nodeId)) return out;
+    visited.add(nodeId);
+
+    const node = nodes[nodeId];
+    if (!node) return out;
+    const inputs = node.inputs || {};
+
+    for (const [k, v] of Object.entries(inputs)) {
+        if (Array.isArray(v) && v.length > 0 && /model|guider|pipe|lora_stack/.test(k)) {
+            traceLoras(v, nodes, out, visited);
+        }
+    }
+    for (const [name, strength] of extractLoras(inputs)) {
+        out[name] = strength;
+    }
+    return out;
+}
+
 
 const LATENT_LINK_KEYS = [
     'latent_image', 'latent', 'latents', 'samples', 'image', 'images', 'pixels', 'video'
@@ -305,7 +373,7 @@ function traceSamplingChain(nodeId, nodes, visited, chain) {
     }
 
     // Prefer latent link connections, otherwise follow anything else (reroutes/unknown custom nodes)
-    const latentLinks = Object.entries(linkEntries).filter(([k]) => LATENT_LINK_KEYS.includes(k));
+    const latentLinks = linkEntries.filter(([k]) => LATENT_LINK_KEYS.includes(k));
     const toFollow = latentLinks.length > 0 ? latentLinks : linkEntries;
     for (const [, link] of toFollow) {
         traceSamplingChain(link[0], nodes, visited, chain);
@@ -318,7 +386,7 @@ function findSamplerChain(nodes) {
     for (const data of Object.values(nodes)) {
         for (const val of Object.values(data.inputs || {})) {
             if (Array.isArray(val) && val.length > 0) {
-                referenced.add(val[0]).toString();
+                referenced.add(val[0].toString());
             }
         }
     }
@@ -491,7 +559,7 @@ function traceModelName(link, nodes, visited = new Set()) {
 
 function extractComfyMetadata(nodes) {
     // For debugging workflows:
-    // console.log(JSON.stringify(nodes, null, 2));
+    console.log(JSON.stringify(nodes, null, 2));
 
     if (!nodes || Object.keys(nodes).length === 0) return {};
 
@@ -516,6 +584,7 @@ function extractComfyMetadata(nodes) {
     let potentialPrompts = [];
     const ksamplers = [];
     let emptyNegative = false;
+    let lorasTraced = false;
 
     const samplerChain = findSamplerChain(nodes);
     const mainSampler = pickMainSampler(samplerChain, nodes);
@@ -571,166 +640,124 @@ function extractComfyMetadata(nodes) {
         if (Array.isArray(modelLink)) {
             const modelName = traceModelName(modelLink, nodes);
             if (modelName) result.model = modelName;
+            Object.assign(activeLoras, traceLoras(modelLink, nodes));
+            lorasTraced = true;
         }
     }
 
-    // Flat scan (fallbacks, LoRAs, size, guidance)
+    // Flat scan (fallbacks, size, guidance)
+    const scan = { positive: null, negative: null, untitled: [], samplers: [], model: null, loras: {} };
+    const textNodes = ["easy positive", "easy negative", "wildcard processor", "impactwildcardprocessor"];
+    const modelKeywords = ['checkpoint', 'unet', 'gguf', 'model'];
+    const ignoreKeywords = ['vae', 'image', 'video', 'lora'];
+
     for (const nodeData of Object.values(nodes)) {
         const nodeType = (nodeData.class_type || '').toLowerCase();
         const inputs = nodeData.inputs || {};
 
-        // Look for positive/negative prompt
-        const textNodes = ["easy positive", "easy negative", "wildcard processor", "impactwildcardprocessor"];
+        // Look for positive/negative prompt (fallback)
         if (nodeType.includes('textencode') || textNodes.includes(nodeType)) {
             const extracted = extractComfyPrompt(nodeData);
 
-            if (extracted.positive && !result.positive) {
-                result.positive = extracted.positive;
-            }
-
-            if (extracted.negative !== null) {
-                if (extracted.negative === '') {
-                    emptyNegative = true;
-                } else if (!result.negative) {
-                    result.negative = extracted.negative;
-                }
-            }
+            if (extracted.positive && !scan.positive) scan.positive = extracted.positive;
+            if (extracted.negative && !scan.negative) scan.negative = extracted.negative;
 
             if (extracted.text) {
                 const title = (nodeData._meta?.title || '').toLowerCase();
-                const textVal = extracted.text;
 
                 // If the title contains "positive" or "negative" it can easily be categorized
-                if (title.includes('positive') && !result.positive) {
-                    result.positive = textVal;
+                if (title.includes('positive')) {
+                    if (!scan.positive) scan.positive = extracted.text;
                 } else if (title.includes('negative')) {
-                    if (textVal === '') emptyNegative = true;
-                    else if (!result.negative) result.negative = textVal;
-                } else if (textVal) {
-                    potentialPrompts.push(textVal);
+                    if (!scan.negative) scan.negative = extracted.text;
+                } else {
+                    scan.untitled.push(extracted.text);
                 }
             }
         }
 
-        // Look for Sampler for settings
+        // Look for Sampler for settings (fallback)
         if (nodeType.includes('sampler')) {
-            let link = inputs.steps || inputs.sigmas;
-            if (Array.isArray(link)) {
-                inputs.steps = resolveLinkedNode(link, nodes, 'steps');
-            }
-            ksamplers.push(inputs);
+            let steps = inputs.steps || inputs.sigmas;
+            if (Array.isArray(steps)) steps = resolveLinkedNode(steps, nodes, 'steps');
+            scan.samplers.push({ ...inputs, steps });
         }
 
         // Look for Guidance, which is the CFG replacement for Flux for example
         if (nodeType.includes('guid')) {
             let guidance = inputs.guidance;
-            if (Array.isArray(guidance)) {
-                guidance = resolveLinkedNode(guidance, nodes, 'cfg');
-            }
+            if (Array.isArray(guidance)) guidance = resolveLinkedNode(guidance, nodes, 'cfg');
             if (guidance) result.cfg = guidance;
         }
 
-        // Look for the model
-        const modelKeywords = ['checkpoint', 'unet', 'gguf', 'model'];
-        const ignoreKeywords = ['vae', 'image', 'video', 'lora'];
-
-        if (!ignoreKeywords.some(ignore => nodeType.includes(ignore))) {
-            if (nodeType.includes('load') && modelKeywords.some(kw => nodeType.includes(kw))) {
-                // Just using the first viable result for now
-                if (!result.model) {
-                    const modelEntry = Object.entries(inputs).find(([k, v]) => k.includes('name') || k.includes('model'));
-                    if (modelEntry && typeof modelEntry[1] === 'string') {
-                        result.model = modelEntry[1].split(/[\\/]/).pop();
-                    }
-                }
+        // Look for the model (fallback)
+        if (!scan.model && nodeType.includes('load') &&
+            modelKeywords.some(kw => nodeType.includes(kw)) &&
+            !ignoreKeywords.some(kw => nodeType.includes(kw))) {
+            const entry = Object.entries(inputs).find(([k]) => k.includes('name') || k.includes('model'));
+            if (entry && typeof entry[1] === 'string') {
+                scan.model = entry[1].split(/[\\/]/).pop();
             }
         }
 
         // Look for EmptyLatent/Resizer to get the resolution
         const isEmptyLatent = nodeType.includes('latent') && nodeType.includes('empty');
         const isResizer = ['imagetovideolatent', 'imageresize'].some(kw => nodeType.includes(kw));
-
         if ((isEmptyLatent || isResizer) && !result.size) {
             let width = inputs.width;
             if (Array.isArray(width)) width = resolveLinkedNode(width, nodes, 'width');
-
             let height = inputs.height;
             if (Array.isArray(height)) height = resolveLinkedNode(height, nodes, 'height');
-
-            if (width && height) {
-                result.size = `${width}x${height}`;
-            }
+            if (width && height) result.size = `${width}x${height}`;
         }
 
-        // Look for LoRas
+        // Look for LoRas (fallback)
         if (nodeType.includes('lora')) {
-            let loraName = inputs.lora_name;
-            let loraStrength = parseFloat(inputs.strength_model);
-
-            if (loraName && typeof loraName === 'string' && loraStrength !== 0.0) {
-                // Remove rest of path and file extension
-                loraName = loraName.split(/[\\/]/).pop().split('.')[0];
-                activeLoras[loraName] = isNaN(loraStrength) ? 1.0 : loraStrength;
-            }
-            // Multi-Lora Loader node handling
-            else if (inputs.lora_1) {
-                for (const [k, v] of Object.entries(inputs)) {
-                    if (k.startsWith('lora') && typeof v === 'object') {
-                        let innerName = v.lora;
-                        if (innerName && typeof innerName === 'string') {
-                            innerName = innerName.split(/[\\/]/).pop().split('.')[0];
-                            if (v.on) {
-                                activeLoras[innerName] = v.strength;
-                            }
-                        }
-                    }
-                }
-            }
+            for (const [name, strength] of extractLoras(inputs)) scan.loras[name] = strength;
         }
     }
 
-    // The longest text probably is the positive prompt. If found already, it's probably the negative prompt
-    potentialPrompts.sort((a, b) => b.length - a.length);
+    // Prompts: only fill what the trace left open
+    if (!result.positive) result.positive = scan.positive || '';
 
-    if (potentialPrompts.length > 0) {
-        if (!result.positive) {
-            result.positive = potentialPrompts.shift();
-        }
-        if (!result.negative && !emptyNegative && potentialPrompts.length > 0) {
-            result.negative = potentialPrompts.shift();
-        }
+    const untitled = scan.untitled
+        .filter(t => t !== result.positive)
+        .sort((a, b) => b.length - a.length);
+
+    if (!result.positive) result.positive = untitled.shift() || '';
+    if (!result.negative && !emptyNegative) {
+        result.negative = scan.negative || untitled.shift() || '';
     }
 
-    // The Ksampler with the highest number of steps probably is the main Ksampler, refiners/upscale typically use fewer steps
-    ksamplers.sort((a, b) => {
-        let aSteps = parseFloat(a.steps) || 0;
-        let bSteps = parseFloat(b.steps) || 0;
-        return bSteps - aSteps;
-    });
+    // Sampler settings: only without a traced main pass
+    if (!mainSampler && scan.samplers.length > 0) {
+        scan.samplers.sort((a, b) => (parseFloat(b.steps) || 0) - (parseFloat(a.steps) || 0));
+        const s = scan.samplers[0];
 
-    if (ksamplers.length > 0) {
-        const mainSampler = ksamplers[0];
+        result.steps = s.steps;
 
-        result.steps = mainSampler.steps;
-
-        let samplerVal = mainSampler.sampler || mainSampler.sampler_name;
+        let samplerVal = s.sampler || s.sampler_name;
         if (Array.isArray(samplerVal)) samplerVal = resolveLinkedNode(samplerVal, nodes, 'sampler');
         result.sampler = samplerVal;
 
-        let schedulerVal = mainSampler.scheduler;
+        let schedulerVal = s.scheduler;
         if (Array.isArray(schedulerVal)) schedulerVal = resolveLinkedNode(schedulerVal, nodes, 'scheduler');
         result.scheduler = schedulerVal;
 
         if (!result.cfg) {
-            let cfgVal = mainSampler.cfg;
+            let cfgVal = s.cfg;
             if (Array.isArray(cfgVal)) cfgVal = resolveLinkedNode(cfgVal, nodes, 'cfg');
             result.cfg = cfgVal;
         }
 
-        let seedVal = mainSampler.seed || mainSampler.noise;
+        let seedVal = s.seed || s.noise;
         if (Array.isArray(seedVal)) seedVal = resolveLinkedNode(seedVal, nodes, 'seed');
         result.seed = seedVal;
     }
+
+    if (!result.model && scan.model) result.model = scan.model;
+
+    if (!lorasTraced) Object.assign(activeLoras, scan.loras);
 
     return result;
 }
