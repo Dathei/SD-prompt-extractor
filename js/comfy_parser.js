@@ -39,7 +39,7 @@ function resolveLinkedNode(link, nodes, targetParam = null, visited = new Set())
 
         // Handle reroutes
         if (classType.includes('reroute') || classType.includes('showanything')) {
-            console.log(inputs);
+            // console.log(inputs);
             if ('text' in inputs && typeof inputs.text === 'string' && inputs.text.trim() !== '') {
                 return inputs.text;
             }
@@ -220,7 +220,6 @@ function extractComfyPrompt(nodeData) {
 
     // ImpactWildcardProcessor
     const wildcardText = getStr('populated_text');
-    console.log(wildcardText);
     if (wildcardText) {
         extracted.text = wildcardText;
         return extracted;
@@ -560,7 +559,7 @@ function traceModelName(link, nodes, visited = new Set()) {
 
 function extractComfyMetadata(nodes) {
     // For debugging workflows:
-    console.log(JSON.stringify(nodes, null, 2));
+    // console.log(JSON.stringify(nodes, null, 2));
 
     if (!nodes || Object.keys(nodes).length === 0) return {};
 
