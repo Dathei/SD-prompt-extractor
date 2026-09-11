@@ -103,6 +103,7 @@ function resolveLinkedNode(link, nodes, targetParam = null, visited = new Set())
             'steps': ['steps', 'sigmas'],
             'seed': ['seed', 'noise', 'noise_seed'],
             'cfg': ['cfg', 'guider', 'guidance'],
+            'text': ['populated_text', 'prompt'],
         };
 
         const targetAliases = aliases[targetParam] || [];
