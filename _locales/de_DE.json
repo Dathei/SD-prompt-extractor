@@ -29,5 +29,12 @@
       "sizeLimit": "Extraktion für {{name}} übersprungen: {{size}} MB überschreitet das Limit von {{limit}} MB",
       "metadataLimit": "Videoextraktion für {{name}} übersprungen: Metadatengröße überschreitet das Limit von {{limit}} MB"
     }
+  },
+  "confirmOverwrite": {
+    "title": "Notizen überschreiben?",
+    "message": "Ausgewählte Elemente mit vorhandenen Notizen: {{count}}",
+    "detail": "Die vorhandenen Notizen werden durch die extrahierten Metadaten ersetzt. Der vorherige Text kann nicht wiederhergestellt werden. Tags, die du selbst hinzugefügt hast, bleiben erhalten.",
+    "confirm": "Überschreiben",
+    "cancel": "Bestehende Notizen behalten"
   }
 }

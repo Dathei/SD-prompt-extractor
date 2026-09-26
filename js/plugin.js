@@ -186,25 +186,42 @@ eagle.onPluginCreate((plugin) => {
 	}, 1000);
 
 	if (extractBtn) {
-		extractBtn.addEventListener('click', async  () => {
+		extractBtn.addEventListener('click', async () => {
 			if (selectedItems.length === 0 || isProcessing) return;
 
 			isProcessing = true;
 			extractBtn.disabled = true;
 
-			const overwrite = chkOverwrite.checked;
-			const loraTags = chkLoras.checked;
-			const stripVersion = chkStripVersion.checked;
+			try {
+				const items = selectedItems.slice();
+				const overwrite = chkOverwrite.checked;
+				const loraTags = chkLoras.checked;
+				const stripVersion = chkStripVersion.checked;
 
-			const numModified = await extractMetadata(selectedItems, overwrite, loraTags, stripVersion, true);
+				if (overwrite) {
+					const affected = items.filter(i => i.annotation && i.annotation.trim() !== '').length;
+					if (affected > 0) {
+						const result = await eagle.dialog.showMessageBox({
+							type: 'warning',
+							title: t('confirmOverwrite.title'),
+							message: t('confirmOverwrite.message', { count: affected }),
+							detail: t('confirmOverwrite.detail'),
+							buttons: [t('confirmOverwrite.cancel'), t('confirmOverwrite.confirm')],
+						});
+						if (result.response !== 1) return;
+					}
+				}
 
-			if (selectedItems.length > 1) {
-				writeLog(t('logWindow.batchExtraction',
-					{ successCount: numModified, skippedCount: selectedItems.length - numModified }));
+				const numModified = await extractMetadata(items, overwrite, loraTags, stripVersion, true);
+
+				if (items.length > 1) {
+					writeLog(t('logWindow.batchExtraction',
+						{ successCount: numModified, skippedCount: items.length - numModified }));
+				}
+			} finally {
+				isProcessing = false;
+				extractBtn.disabled = false;
 			}
-
-			isProcessing = false;
-			extractBtn.disabled = false;
 		});
 	}
 

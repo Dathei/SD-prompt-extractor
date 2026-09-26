@@ -29,5 +29,12 @@
       "sizeLimit": "已跳过 {{name}} 的提取：{{size}} MB 超过 {{limit}} MB 限制",
       "metadataLimit": "跳过视频提取 {{name}}：元数据超过 {{limit}} MB 限制"
     }
+  },
+  "confirmOverwrite": {
+    "title": "覆盖注释？",
+    "message": "已有注释的所选项目：{{count}} 个",
+    "detail": "这些注释将被提取的元数据替换，原有内容无法恢复。您自己添加的标签会保留。",
+    "confirm": "覆盖",
+    "cancel": "保留现有注释"
   }
 }
