@@ -264,7 +264,7 @@ eagle.onPluginCreate((plugin) => {
 
 				let fullItems = await eagle.item.getByIds(idsToProcess);
 
-				const numModified = await extractMetadata(fullItems, settings.overwrite, settings.addLoraTags, settings.stripVersion, false);
+				const numModified = await extractMetadata(fullItems, false, settings.addLoraTags, settings.stripVersion, false);
 				if (idsToProcess.length > 1) {
 					writeLog(t('logWindow.batchExtraction', {
 						successCount: numModified,
