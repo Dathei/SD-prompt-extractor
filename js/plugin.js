@@ -48,69 +48,97 @@ function writeLog(message) {
 	logWindow.scrollTop = logWindow.scrollHeight;
 }
 
+function setProgress(value, max) {
+	const bar = document.getElementById('progressBar');
+	if (!bar) return;
+	bar.style.display = 'block';
+	bar.max = max;
+	bar.value = value;
+}
 
-async function extractMetadata(items, overwrite = false, addLoraTags = true, stripVersion = true, isManual = false) {
-	const progressBar = document.getElementById('progressBar');
-	let numModified = 0;
+function hideProgress() {
+	const bar = document.getElementById('progressBar');
+	if (bar) setTimeout(() => { bar.style.display = 'none'; }, 100);
+}
 
-	if (isManual && progressBar) {
-		progressBar.style.display = 'block';
-		progressBar.max = items.length;
-		progressBar.value = 0;
-	}
+
+async function planExtraction(items, overwrite, addLoraTags, stripVersion, onProgress) {
+	// Read files and plan changes without saving anything
+	const plans = [];
 
 	for (let i = 0; i < items.length; i++) {
-		let item = items[i];
+		const item = items[i];
+		if (onProgress) onProgress(i + 1, items.length);
 
-		if (!overwrite && item.annotation && !addLoraTags) {
-			if (isManual && progressBar) progressBar.value = i + 1;
-			continue;
-		}
-
-		const [fresh] = await eagle.item.getByIds([item.id]);
-		if (!fresh) continue;
-		item = fresh;
+		if (!overwrite && item.annotation && !addLoraTags) continue;
 
 		try {
-			const filePath = item.filePath;
-			const rawMetadata = await fileReader.loadFile(filePath);
-
+			const rawMetadata = await fileReader.loadFile(item.filePath);
 			if (!rawMetadata) {
 				writeLog(t('logWindow.noMetadata', { name: item.name }));
-				if (isManual && progressBar) progressBar.value = i + 1;
 				continue;
 			}
 
 			const { annotation, tags, pluginTags } = metadataParser.getFormattedMetadata(rawMetadata, stripVersion);
 			if (!annotation && pluginTags.length === 0) {
 				writeLog(t('logWindow.unsupportedFormat', { name: item.name }));
-				if (isManual && progressBar) progressBar.value = i + 1;
+				continue;
+			}
+
+			const oldAnnotation = item.annotation || '';
+			plans.push({
+				id: item.id,
+				name: item.name,
+				annotation,
+				tags,
+				pluginTags,
+				oldAnnotation,
+				replacesAnnotation: overwrite && annotation !== '' &&
+					oldAnnotation !== '' && oldAnnotation !== annotation,
+			});
+		} catch (error) {
+			writeLog(t('logWindow.failedExtraction', { name: item.name, error: error.message }));
+		}
+	}
+	return plans;
+}
+
+async function applyExtraction(plans, overwrite, addLoraTags, onProgress) {
+	// write the planned changes, each item is re-checked right before saving
+	let numModified = 0;
+
+	for (let i = 0; i < plans.length; i++) {
+		const plan = plans[i];
+		if (onProgress) onProgress(i + 1, plans.length);
+
+		try {
+			const [item] = await eagle.item.getByIds([plan.id]);
+			if (!item) continue;
+
+			const currentAnnotation = item.annotation || '';
+			if (currentAnnotation !== plan.oldAnnotation) {
+				writeLog(t('logWindow.annotationChanged', { name: item.name }));
 				continue;
 			}
 
 			let modified = false;
 
-			if (annotation !== "" && (overwrite || !item.annotation)) {
-				if (item.annotation !== annotation) {
-					item.annotation = annotation;
-					modified = true;
-				}
+			if (plan.annotation !== '' && (overwrite || !currentAnnotation) &&
+				currentAnnotation !== plan.annotation) {
+				item.annotation = plan.annotation;
+				modified = true;
 			}
 
-			if (tags.length > 0 && addLoraTags) {
-				let currentTags = item.tags || [];
-				let newTags = [];
+			if (plan.tags.length > 0 && addLoraTags) {
+				const currentTags = item.tags || [];
+				const ownedTags = new Set(plan.pluginTags.map(tag => tag.toLowerCase()));
+				const baseTags = overwrite
+					? currentTags.filter(tag => !ownedTags.has(tag.toLowerCase()))
+					: currentTags;
+				const newTags = [...new Set([...baseTags, ...plan.tags])];
 
-				const ownedTags = new Set(pluginTags.map(t => t.toLowerCase()));
-
-				if (overwrite) {
-					const preservedTags = currentTags.filter(t => !ownedTags.has(t.toLowerCase()));
-					newTags = [...new Set([...preservedTags, ...tags])];
-				} else {
-					newTags = [...new Set([...currentTags, ...tags])];
-				}
-
-				if (currentTags.length !== newTags.length || !currentTags.every((t, i) => t === newTags[i])) {
+				if (currentTags.length !== newTags.length ||
+					!currentTags.every((tag, j) => tag === newTags[j])) {
 					item.tags = newTags;
 					modified = true;
 				}
@@ -121,15 +149,9 @@ async function extractMetadata(items, overwrite = false, addLoraTags = true, str
 				numModified += 1;
 				writeLog(t('logWindow.successfulExtraction', { name: item.name }));
 			}
-
 		} catch (error) {
-			writeLog(t('logWindow.failedExtraction', { name: item.name, error: error.message }));
+			writeLog(t('logWindow.failedExtraction', { name: plan.name, error: error.message }));
 		}
-		if (isManual && progressBar) progressBar.value = i + 1;
-	}
-
-	if (isManual && progressBar) {
-		setTimeout(() => { progressBar.style.display = 'none'; }, 100);
 	}
 	return numModified;
 }
@@ -187,38 +209,40 @@ eagle.onPluginCreate((plugin) => {
 
 	if (extractBtn) {
 		extractBtn.addEventListener('click', async () => {
-			if (selectedItems.length === 0 || isProcessing) return;
-
+			if (isProcessing) return;
 			isProcessing = true;
 			extractBtn.disabled = true;
 
 			try {
-				const items = selectedItems.slice();
+				const items = await eagle.item.getSelected();
+				if (items.length === 0) return;
+
 				const overwrite = chkOverwrite.checked;
 				const loraTags = chkLoras.checked;
 				const stripVersion = chkStripVersion.checked;
 
-				if (overwrite) {
-					const affected = items.filter(i => i.annotation && i.annotation.trim() !== '').length;
-					if (affected > 0) {
-						const result = await eagle.dialog.showMessageBox({
-							type: 'warning',
-							title: t('confirmOverwrite.title'),
-							message: t('confirmOverwrite.message', { count: affected }),
-							detail: t('confirmOverwrite.detail'),
-							buttons: [t('confirmOverwrite.cancel'), t('confirmOverwrite.confirm')],
-						});
-						if (result.response !== 1) return;
-					}
+				const plans = await planExtraction(items, overwrite, loraTags, stripVersion, setProgress);
+
+				const toReplace = plans.filter(p => p.replacesAnnotation).length;
+				if (toReplace > 0) {
+					const result = await eagle.dialog.showMessageBox({
+						type: 'warning',
+						title: t('confirmOverwrite.title'),
+						message: t('confirmOverwrite.message', { count: toReplace }),
+						detail: t('confirmOverwrite.detail'),
+						buttons: [t('confirmOverwrite.cancel'), t('confirmOverwrite.confirm')],
+					});
+					if (result.response !== 1) return;
 				}
 
-				const numModified = await extractMetadata(items, overwrite, loraTags, stripVersion, true);
+				const numModified = await applyExtraction(plans, overwrite, loraTags, setProgress);
 
 				if (items.length > 1) {
 					writeLog(t('logWindow.batchExtraction',
 						{ successCount: numModified, skippedCount: items.length - numModified }));
 				}
 			} finally {
+				hideProgress();
 				isProcessing = false;
 				extractBtn.disabled = false;
 			}
@@ -281,7 +305,8 @@ eagle.onPluginCreate((plugin) => {
 
 				let fullItems = await eagle.item.getByIds(idsToProcess);
 
-				const numModified = await extractMetadata(fullItems, false, settings.addLoraTags, settings.stripVersion, false);
+				const plans = await planExtraction(fullItems, false, settings.addLoraTags, settings.stripVersion);
+				const numModified = await applyExtraction(plans, false, settings.addLoraTags);
 				if (idsToProcess.length > 1) {
 					writeLog(t('logWindow.batchExtraction', {
 						successCount: numModified,

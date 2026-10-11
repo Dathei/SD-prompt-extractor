@@ -28,11 +28,12 @@
     "fileReader": {
       "sizeLimit": "Extraction skipped for {{name}}: {{size}} MB exceeds the {{limit}} MB limit",
       "metadataLimit": "Video extraction skipped for {{name}}: metadata exceeds the {{limit}} MB limit"
-    }
+    },
+    "annotationChanged": "Skipped {{name}}: the annotation changed during extraction."
   },
   "confirmOverwrite": {
     "title": "Overwrite annotations?",
-    "message": "Selected items with an existing annotation: {{count}}",
+    "message": "Annotations that will be replaced: {{count}}",
     "detail": "These annotations will be replaced with the extracted metadata. The previous text cannot be restored. Tags you added yourself are kept.",
     "confirm": "Overwrite",
     "cancel": "Keep existing annotations"
